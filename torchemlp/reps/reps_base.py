@@ -1,8 +1,17 @@
+from typing import Union, Optional, Any, Literal, List, Tuple, Dict
 from abc import ABC, abstractmethod
 
 from torchemlp.utils import is_scalar
 
-from torchemlp.ops import LinearOperator, LazyJVP, LazyConcat
+from torchemlp.groups import Group
+from torchemlp.ops import (
+    LinearOperator,
+    GroupElement,
+    ReprElement,
+    I,
+    LazyJVP,
+    LazyConcat,
+)
 from torchemlp.ops import densify, lazify
 
 from reps_utils import dictify_rep, mul_reps
@@ -23,56 +32,55 @@ class Rep(ABC):
     # Cache of canonicalized reps of the Rep class (used by the EMLP solver)
     solcache = dict()
 
-    is_permutation = False
+    is_permutation: bool = False
 
     @abstractmethod
-    def rho(self, M):
+    def rho(self, M: GroupElement) -> ReprElement:
         """
         Calculate the discrete group representation of an input matrix M.
         """
         pass
 
     @abstractmethod
-    def drho(self, A):
+    def drho(self, A: GroupElement) -> ReprElement:
         """
         Calculate the Lie algebra representation of an input matrix A.
         """
-        I = torch.eye(A.shape[0], dtype=A.dtype, device=A.device)
+        I = torch.eye(A.shape[0], dtype=A.dtype)
         return LazyJVP(self.rho, I, A)
 
     @abstractmethod
-    def __call__(self, G):
+    def __call__(self, G: GroupElement) -> ReprElement:
         pass
 
     @abstractmethod
-    def __repr__(self):
+    def __repr__(self) -> str:
         pass
 
-    def __str__(self):
+    def __str__(self) -> str:
         return repr(self)
 
-    def __eq__(self, other):
-        if type(self) != type(other):
-            return False
+    def __eq__(self, other: Rep) -> bool:
         return dictify_rep(self) == dictify_rep(other)
 
-    def __hash__(self):
+    def __hash__(self) -> int:
         return hash((type(self), dictify_rep(self)))
 
     @property
-    def concrete(self):
-        return hasattr(self, "G") and self.G is not None
+    def concrete(self) -> bool:
+        if isinstance(self, Base):
+            return self.G is not None
+        return False
 
     @property
-    def size(self):
+    @abstractmethod
+    def size(self) -> int:
         """
         Returns the size of the vector space on which the group acts.
         """
-        if self.concrete and self.G is not None:
-            return self.rho(self.G.sample()).shape[-1]
-        return NotImplemented
+        pass
 
-    def canonicalize(self):
+    def canonicalize(self) -> Tuple[Rep, torch.Tensor]:
         """
         Return canonical form of representation. This enables you to reuse
         equivalent solutions in the EMLP solver. Should return the canonically
@@ -85,30 +93,32 @@ class Rep(ABC):
         """
         return self, torch.arange(self.size)
 
-    def rho_dense(self, M):
+    def rho_dense(self, M: GroupElement) -> torch.Tensor:
         return densify(self.rho(M))
 
-    def drho_dense(self, A):
+    def drho_dense(self, A: GroupElement) -> torch.Tensor:
         return densify(self.drho(A))
 
     @property
-    def constraint_matrix(self):
+    def constraint_matrix(self) -> LinearOperator:
         """
         Get the equivariance constraint matrix.
         """
-        if not self.concrete:
-            raise ValueError("Representation does not have a group")
-        discrete_constraints = [
-            lazify(self.rho(h)) - I(self.size) for h in self.G.discrete_generators
-        ]
-        continuous_constraints = [lazify(self.drho(A)) for A in self.G.lie_algebra]
-        constraints = discrete_constraints + continuous_constraints
+        if isinstance(self, Base) and self.G is not None:
+            discrete_constraints = [
+                lazify(self.rho(h)) - I(h.dtype, (self.size, self.size))
+                for h in self.G.discrete_generators
+            ]
+            continuous_constraints = [lazify(self.drho(A)) for A in self.G.lie_algebra]
+            constraints = discrete_constraints + continuous_constraints
 
-        return (
-            LazyConcat(constraints)
-            if constraints
-            else lazify(torch.zeros((1, self.size)))
-        )
+            return (
+                LazyConcat(constraints)
+                if constraints
+                else lazify(torch.zeros((1, self.size)))
+            )
+        else:
+            raise ValueError("Representation does not have a group")
 
     @property
     def equivariant_basis(self):
@@ -289,56 +299,58 @@ class Base(Rep):
     representations.
     """
 
-    def __init__(self, G=None):
+    def __init__(self, G: Optional[Group] = None):
         self.G = G
         if G is not None:
             self.is_permutation = G.is_permutation
 
-    def __call__(self, G):
+    def __call__(self, G: Group):
         return self.__class__(G)
 
-    def rho(self, M):
+    def rho(self, M: Union[dict, Any]) -> Union[dict, Any]:
         if self.concrete and isinstance(M, dict):
             M = M[self.G]
         return M
 
-    def drho(self, A):
+    def drho(self, A: Union[dict, Any]) -> Union[dict, Any]:
         if self.concrete and isinstance(A, dict):
             A = A[self.G]
         return A
 
-    def size(self):
+    def size(self) -> Optional[int]:
         if self.G is None:
             raise ValueError("Must have G to find size")
         return self.G.d
 
-    def __repr__(self):
+    def __repr__(self) -> Literal["V"]:
         return "V"
 
-    def __hash__(self):
+    def __hash__(self) -> int:
         return hash((type(self), self.G))
 
-    def __eq__(self, other):
-        return type(other) == type(self) and self.G == other.G
+    def __eq__(self, other: Rep) -> bool:
+        if isinstance(other, Base):
+            return self.G == other.G
+        return False
 
-    def __lt__(self, other):
+    def __lt__(self, other: Rep) -> bool:
         if isinstance(other, Dual):
             return True
         return super().__lt__(other)
 
 
-class Dual(Rep):
+class Dual(Base):
     """
     Dual representation to the input representation.
     """
 
-    def __init__(self, rep):
+    def __init__(self, rep: Base):
         self.rep = rep
         self.G = rep.G
         if hasattr(rep, "is_permutation"):
             self.is_permutation = rep.is_permutation
 
-    def __call__(self, G):
+    def __call__(self, G: Group) -> Base:
         return self.rep(G).T
 
     def rho(self, M):

@@ -16,11 +16,11 @@ class LazyKron(LinearOperator):
         super().__init__(Ms[0].dtype, shape)
         self.Ms = Ms
 
-    def matvec(self, v):
+    def matvec(self, v: torch.Tensor) -> torch.Tensor:
         return self.matmat(v).reshape(-1)
 
     # TODO there's gotta be a cleaner way to do this ...
-    def matmat(self, B):
+    def matmat(self, B: torch.Tensor) -> torch.Tensor:
         ev = B.reshape(*[Mi.shape[-1] for Mi in self.Ms], -1)
         for i, M in enumerate(self.Ms):
             ev_front = torch.moveaxis(ev, i, 0)
@@ -30,13 +30,13 @@ class LazyKron(LinearOperator):
             ev = torch.moveaxis(Mev_front, 0, i)
         return ev.reshape(self.shape[0], ev.shape[-1])
 
-    def adjoint(self):
+    def adjoint(self) -> LinearOperator:
         return LazyKron([Mi.H for Mi in self.Ms])
 
-    def invT(self):
+    def invT(self) -> LinearOperator:
         return LazyKron([Mi.invT() for Mi in self.Ms])
 
-    def dense(self):
+    def dense(self) -> torch.Tensor:
         Ms_dense = [M.dense if isinstance(M, LinearOperator) else M for M in self.Ms]
         return reduce(torch.kron, Ms_dense)  # reducing via kronecker product
 
