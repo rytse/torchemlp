@@ -368,7 +368,7 @@ class _PowerLinearOperator(LinearOperator):
         return self.power(self.A.rmatmat, x)
 
     def adjoint(self):
-        return self.A.H**self.p
+        return self.A.H ** self.p
 
     def invT(self):
         return self.A.invT() ** self.p

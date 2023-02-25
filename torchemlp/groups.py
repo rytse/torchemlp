@@ -1,4 +1,4 @@
-from typing import Union, Optional
+from typing import Union, Optional, List
 from abc import ABC
 import random
 
@@ -16,10 +16,11 @@ from torchemlp.ops import (
 )
 
 
-def rel_err(A, B, epsilon=1e-6):
-    return torch.mean(torch.abs(A - B)) / (
-        torch.mean(torch.abs(A)) + torch.mean(torch.abs(B)) + epsilon
-    )
+def rel_err(A: LinearOperator, B: LinearOperator, epsilon: float = 1e-6):
+    mad = torch.mean(torch.abs(A.dense - B.dense))  # mean abs diff
+    ama = torch.mean(torch.abs(A.dense))  # a mean abs
+    bma = torch.mean(torch.abs(B.dense))  # b mean abs
+    return mad / (ama + bma + epsilon)
 
 
 class Group(ABC):
@@ -31,10 +32,10 @@ class Group(ABC):
     d: Optional[int] = None
 
     # Continuous generators
-    lie_algebra: Optional[list[LinearOperator | torch.Tensor]] = None
+    lie_algebra: List[LinearOperator] = []
 
     # Discrete generators
-    discrete_generators: list[LinearOperator | torch.Tensor] = None
+    discrete_generators: List[LinearOperator] = []
 
     # Sampling scale noise
     z_scale: float = 1
@@ -62,52 +63,42 @@ class Group(ABC):
             epsilon = 1e-6
 
         # Fill in self.d
-        if self.d is NotImplemented:
-            if self.lie_algebra is not NotImplemented and len(self.lie_algebra) > 0:
+        if self.d is None:
+            if len(self.lie_algebra) > 0:
                 self.d = self.lie_algebra[0].shape[-1]
-            elif (
-                self.discrete_generators is not NotImplemented
-                and len(self.discrete_generators) > 0
-            ):
+            elif len(self.discrete_generators) > 0:
                 self.d = self.discrete_generators[0].shape[-1]
             else:
                 raise NotImplementedError("No generators found")
 
+        """
         # Fill in missing generators
-        if self.lie_algebra is NotImplemented:
-            self.lie_algebra = torch.zeros((0, self.d, self.d))
-        if self.discrete_generators is NotImplemented:
-            self.discrete_generators = torch.zeros((0, self.d, self.d))
+        if len(self.lie_algebra) == 0:
+            self.lie_algebra = [MatrixLinearOperator(torch.zeros((0, self.d, self.d))]
+        if len(self.discrete_generators) == 0:
+            self.discrete_generators = [MatrixLinearOperator(torch.zeros((0, self.d, self.d)))]
+        """
 
         # Check orthogonal flag
         if self.is_permutation:
             self.is_orthogonal = True
-        if self.is_orthogonal is None:
+        if (
+            len(self.lie_algebra) > 0
+            and rel_err(self.lie_algebra.H, self.lie_algebra) < epsilon
+            or len(self.discrete_generators) > 0
+            and rel_err(self.discrete_generators.H, self.discrete_generators) < epsilon
+        ):
             self.is_orthogonal = True
 
-            if len(self.lie_algebra) != 0:
-                self.is_orthogonal &= (
-                    rel_err(-torch.tranpose(self.lie_algebra, 2, 1), self.lie_algebra)
-                    < epsilon
-                )
-            if len(self.discrete_generators) != 0:
-                self.is_orthogonal &= (
-                    rel_err(
-                        -torch.tranpose(self.discrete_generators, 2, 1),
-                        self.discrete_generators,
-                    )
-                    < epsilon
-                )
-
         # Check permutation flag
-        if self.is_orthogonal and (self.is_permutation is None):
-            self.is_permutation = True
-
-            self.is_permutation &= len(self.lie_algebra) == 0
-            if len(self.discrete_generators) != 0:
-                self.is_permutation &= torch.all(
-                    torch.sum((self.discrete_generators == 1).astype(int), dim=-1) == 1
-                )
+        if (
+            self.is_orthogonal
+            and len(self.lie_algebra) == 0
+            and len(self.discrete_generators) > 0
+        ):
+            h_dense = torch.cat([h.dense for h in self.discrete_generators], dim=0)
+            if torch.all((h_dense == 1).sum(-1) == 1):
+                self.is_permutation = True
 
     def samples(self, N):
         """
