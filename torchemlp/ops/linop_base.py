@@ -38,6 +38,9 @@ class LinearOperator(ABC):
 
     T = property(transpose)
 
+    def invT(self) -> "LinearOperator":
+        raise NotImplementedError
+
     def rmatvec(self, x: torch.Tensor) -> torch.Tensor:
         """
         Perform adjoint y = A^H x where A is the linear operator. Creates a new
@@ -172,28 +175,6 @@ class LinearOperator(ABC):
         representing the operator in R^n.
         """
         return self @ torch.eye(self.shape[-1])
-
-
-class GroupElement(LinearOperator):
-    """
-    A linear operator that we think of as a group element.
-
-    __brand_group_elem__ keeps group element types distinct from representation
-    element types.
-    """
-
-    __brand_group_elem__: bool = True
-
-
-class ReprElement(LinearOperator):
-    """
-    A linear operator that we think of as a representation of a group element.
-
-    __brand_repr_elem__ keeps representation element types distinct from group
-    element types.
-    """
-
-    __brand_repr_elem__: bool = True
 
 
 class _AdjointLinearOperator(LinearOperator):
@@ -436,6 +417,23 @@ class MatrixLinearOperator(LinearOperator):
 
     def adjoint(self) -> LinearOperator:
         return MatrixLinearOperator(self.A.H)
+
+
+class ZeroOperator(LinearOperator):
+    def __init__(self):
+        super(ZeroOperator, self).__init__(None, (0,))
+
+    def matvec(self, x: torch.Tensor) -> torch.Tensor:
+        return torch.zeros_like(x)
+
+    def matmat(self, x: torch.Tensor) -> torch.Tensor:
+        return torch.zeros_like(x)
+
+    def rmatvec(self, x: torch.Tensor) -> torch.Tensor:
+        return torch.zeros_like(x)
+
+    def rmatmat(self, x: torch.Tensor) -> torch.Tensor:
+        return torch.zeros_like(x)
 
 
 class IdentityOperator(LinearOperator):

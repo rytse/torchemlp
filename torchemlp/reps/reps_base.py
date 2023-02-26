@@ -1,21 +1,30 @@
 from typing import Union, Optional, Any, Literal, List, Tuple, Dict
 from abc import ABC, abstractmethod
 
-from torchemlp.utils import is_scalar
+from torchemlp.utils import (
+    GroupElem,
+    GroupElems,
+    LieAlgebraElem,
+    LieAlgebraElems,
+    ReprElem,
+    ReprElems,
+    is_scalar,
+)
 
 from torchemlp.groups import Group
 from torchemlp.ops import (
     LinearOperator,
-    GroupElement,
-    ReprElement,
+    ZeroOperator,
     I,
     LazyJVP,
     LazyConcat,
 )
 from torchemlp.ops import densify, lazify
 
-from reps_utils import dictify_rep, mul_reps
-from product_sum_reps import SumRep, DeferredSumRep
+from reps_utils import dictify_rep
+from reps_solvers import orthogonal_complement, krylov_constraint_solve
+
+from reps_prod_sum import SumRep, DeferredSumRep
 
 import torch
 
@@ -30,27 +39,38 @@ class Rep(ABC):
     """
 
     # Cache of canonicalized reps of the Rep class (used by the EMLP solver)
-    solcache = dict()
+    solcache: Dict["Rep", torch.Tensor] = dict()
 
     is_permutation: bool = False
 
+    def __init__(self, G: Optional[Group] = None):
+        """
+        Initialize a rep object with the group it acts on.
+        """
+        self.G = G
+
     @abstractmethod
-    def rho(self, M: GroupElement) -> ReprElement:
+    def rho(self, g: GroupElem) -> ReprElem:
         """
         Calculate the discrete group representation of an input matrix M.
         """
         pass
 
     @abstractmethod
-    def drho(self, A: GroupElement) -> ReprElement:
+    def drho(self, A: LieAlgebraElem) -> ReprElem:
         """
         Calculate the Lie algebra representation of an input matrix A.
         """
+        if isinstance(A, torch.Tensor):
+            A_dense = A
+        elif isinstance(A, LinearOperator):
+            A_dense = A.dense
+
         I = torch.eye(A.shape[0], dtype=A.dtype)
-        return LazyJVP(self.rho, I, A)
+        return LazyJVP(self.rho, I, A_dense)
 
     @abstractmethod
-    def __call__(self, G: GroupElement) -> ReprElement:
+    def __call__(self, gA: GroupElem | LieAlgebraElem) -> ReprElem:
         pass
 
     @abstractmethod
@@ -60,17 +80,11 @@ class Rep(ABC):
     def __str__(self) -> str:
         return repr(self)
 
-    def __eq__(self, other: Rep) -> bool:
+    def __eq__(self, other: "Rep") -> bool:
         return dictify_rep(self) == dictify_rep(other)
 
     def __hash__(self) -> int:
         return hash((type(self), dictify_rep(self)))
-
-    @property
-    def concrete(self) -> bool:
-        if isinstance(self, Base):
-            return self.G is not None
-        return False
 
     @property
     @abstractmethod
@@ -80,7 +94,7 @@ class Rep(ABC):
         """
         pass
 
-    def canonicalize(self) -> Tuple[Rep, torch.Tensor]:
+    def canonicalize(self) -> Tuple["Rep", torch.Tensor]:
         """
         Return canonical form of representation. This enables you to reuse
         equivalent solutions in the EMLP solver. Should return the canonically
@@ -93,42 +107,26 @@ class Rep(ABC):
         """
         return self, torch.arange(self.size)
 
-    def rho_dense(self, M: GroupElement) -> torch.Tensor:
-        return densify(self.rho(M))
+    def rho_dense(self, g: GroupElem) -> torch.Tensor:
+        return densify(self.rho(g))
 
-    def drho_dense(self, A: GroupElement) -> torch.Tensor:
+    def drho_dense(self, A: LieAlgebraElem) -> torch.Tensor:
         return densify(self.drho(A))
 
     @property
+    @abstractmethod
     def constraint_matrix(self) -> LinearOperator:
         """
         Get the equivariance constraint matrix.
         """
-        if isinstance(self, Base) and self.G is not None:
-            discrete_constraints = [
-                lazify(self.rho(h)) - I(h.dtype, (self.size, self.size))
-                for h in self.G.discrete_generators
-            ]
-            continuous_constraints = [lazify(self.drho(A)) for A in self.G.lie_algebra]
-            constraints = discrete_constraints + continuous_constraints
-
-            return (
-                LazyConcat(constraints)
-                if constraints
-                else lazify(torch.zeros((1, self.size)))
-            )
-        else:
-            raise ValueError("Representation does not have a group")
+        pass
 
     @property
-    def equivariant_basis(self):
+    def equivariant_basis(self) -> torch.Tensor:
         """
         Get the equivariant solution basis for the given representation via its
         canonicalization. Caches each canonicalization to a class variable.
         """
-
-        if isinstance(self, Scalar):
-            return torch.ones((1, 1))
 
         canon_rep, perm = self.canonicalize()
         invperm = torch.argsort(perm)
@@ -144,86 +142,133 @@ class Rep(ABC):
         return self.__class__.solcache[canon_rep][invperm]
 
     @property
-    def equivariant_projector(self):
+    def equivariant_projector(self) -> LinearOperator:
         """
         Computes Q @ Q.H lazily to project onto the equivariant basis.
         """
         Q_lazy = lazify(self.equivariant_basis)
         return Q_lazy @ Q_lazy.H
 
-    def __add__(self, other):
+    def __add__(self, other: Union["Rep", int, torch.Tensor]) -> "Rep":
         """
         Compute the direct sum of representations.
         """
-        if is_scalar(other):
-            if other == 0:
-                return self
-            return self + other * Scalar
 
-        if self.concrete and other.concrete:
-            return SumRep(self, other)
+        match other:
+            case Rep():
+                if self.G is not None and other.G is not None:
+                    return SumRep(self, other)
+                return DeferredSumRep(self, other)
+            case int():
+                if other == 0:
+                    return self
+                return self + other * Scalar
+            case torch.Tensor():
+                if other.ndim == 0:
+                    if other == 0:
+                        return self
+                    return self + int(other) * Scalar
+                raise ValueError("Can only add reps, ints, and singleton int tensors")
 
-        return DeferredSumRep(self, other)
-
-    def __radd__(self, other):
+    def __radd__(self, other: Union["Rep", int, torch.Tensor]) -> "Rep":
         """
         Compute the direct sum of representations in reverse order.
         """
-        if is_scalar(other):
-            if other == 0:
-                return self
-            return other * Scalar + self
 
-        if self.concrete and other.concrete:
-            return SumRep(other, self)
+        match other:
+            case Rep():
+                if self.G is not None and other.G is not None:
+                    return SumRep(other, self)
+                return DeferredSumRep(other, self)
+            case int():
+                if other == 0:
+                    return self
+                return other * Scalar + self
+            case torch.Tensor():
+                if other.ndim == 0:
+                    if other == 0:
+                        return self
+                    return int(other) * Scalar + self
+                raise ValueError("Can only add reps, ints, and singleton int tensors")
 
-        return DeferredSumRep(other, self)
-
-    def __mul__(self, other):
+    def __mul__(self, x: Union["Rep", int]) -> "Rep":
         """
-        Compute the tensor sum of representations.
+        If x is a rep, return the direct product of self and x.
+        If x is an int, return the repeated tensor sum of self, x times
         """
-        return mul_reps(self, other)
 
-    def __rmul__(self, other):
-        """
-        Compute the tensor sum of representations in reverse order.
-        """
-        return mul_reps(other, self)
+        match x:
+            case Rep():
+                if self.G is not None and x.G is not None:
+                    return ProductRep(self, x)
+                return DeferredProductRep(self, x)
 
-    def __pow__(self, other):
+            case int():
+                assert x >= 0, "Cannot multiply negative number of times"
+
+                if x == 1:
+                    return self
+                elif x == 0:
+                    return ZeroRep()
+                elif self.G is not None:
+                    return SumRep(*(x * [self]))
+                return DeferredSumRep(self, x)
+
+    def __rmul__(self, x: Union["Rep", int]) -> "Rep":
+        """
+        If x is a rep, return the direct product of self and x.
+        If x is an int, return the repeated tensor sum of self, x times
+        """
+
+        match x:
+            case Rep():
+                if self.G is not None and x.G is not None:
+                    return ProductRep(x, self)
+                return DeferredProductRep(x, self)
+
+            case int():
+                assert x >= 0, "Cannot multiply negative number of times"
+
+                if x == 1:
+                    return self
+                elif x == 0:
+                    return ZeroRep()
+                elif self.G is not None:
+                    return SumRep(*(x * [self]))
+                return DeferredSumRep(x, self)
+
+    def __pow__(self, other: int) -> "Rep":
         """
         Compute the iterated tensor product of representations.
         """
-        assert (
-            isinstance(other, int) and other >= 0
-        ), "Power only supported for non-negative integers"
+        assert other >= 0, "Power only supported for non-negative integers"
         out = Scalar
         for _ in range(other):
-            out *= self
+            out = out * self
         return out
 
-    def __rshift__(self, other):
+    def __rshift__(self, other: int) -> "Rep":
         """
         Compute the adjoint map from self->other, overloading the >> operator.
         """
-        return other * self.H
+        return other * self.T
 
-    def __lshift__(self, other):
+    def __lshift__(self, other: "Rep") -> "Rep":
         """
         Compute the adjoint map from other->self, overloading the << operator.
         """
-        return self * other.H
+        return self * other.T
 
-    def __lt__(self, other):
+    def __lt__(self, other: "Rep") -> bool:
         """
         Arbitrarily defined order to sort representations, overloading the <
         operator. Sorts by group, then size, then hash.
         """
-        if other == Scalar:
-            return False
+        match other:
+            case ScalarRep():
+                return False
 
-        if self.concrete and other.concrete:
+        if self.G is not None and other.G is not None:
             if self.G < other.G:
                 return True
             elif self.G > other.G:
@@ -236,60 +281,88 @@ class Rep(ABC):
 
         return hash(self) < hash(other)
 
-    def __mod__(self, other):
+    def __mod__(self, other: "Rep") -> "Rep":
         """
         Compute the Wreath product of representations (not implemented yet)
         """
         return NotImplemented
 
     @property
-    def T(self):
-        if self.concrete and self.G.is_orthogonal:
+    def T(self) -> "Rep":
+        if self.G is not None and self.G.is_orthogonal:
             return self
-        return Dual(self)
+        raise NotImplementedError
+
+
+class ZeroRep(Rep):
+    """
+    Represents the zero vector.
+    """
+
+    def rho(self, g: GroupElem) -> ReprElem:
+        return torch.zeros(g.shape, dtype=g.dtype)
+
+    def drho(self, A: LieAlgebraElem) -> ReprElem:
+        return torch.zeros(A.shape, dtype=A.dtype)
+
+    def __call__(self, g: GroupElem | LieAlgebraElem) -> ReprElem:
+        return torch.zeros(g.shape, dtype=g.dtype)
+
+    def __repr__(self) -> str:
+        return "0V"
+
+    @property
+    def size(self) -> int:
+        return 0
+
+    @property
+    def constraint_matrix(self) -> LinearOperator:
+        return ZeroOperator()
 
 
 class ScalarRep(Rep):
-    def __init__(self, G=None):
+    def __init__(self, G: Optional[Group] = None):
         self.G = G
         self.is_permutation = True
 
-    def __call__(self, G):
+    def __call__(self, G: Optional[Group]) -> Rep:
         self.G = G
         return self
 
-    def size(self):
+    def size(self) -> int:
         return 1
 
-    def __repr__(self):
+    def __repr__(self) -> str:
         return "V⁰"
 
-    def rho(self, M):
+    def rho(self, g: GroupElem) -> ReprElem:
         return torch.eye(1)
 
-    def drho(self, A):
+    def drho(self, A: LieAlgebraElem) -> ReprElem:
         return 0 * torch.eye(1)
 
-    def __hash__(self):
+    @property
+    def constraint_matrix(self) -> LinearOperator:
+        raise NotImplementedError
+
+    @property
+    def equivariant_basis(self):
+        return torch.ones((1, 1))
+
+    def __hash__(self) -> int:
         return 0
 
-    def __eq__(self, other):
+    def __eq__(self, other: Rep) -> bool:
         return isinstance(other, ScalarRep)
 
-    def __mul__(self, other):
-        if isinstance(other, int):
-            return super().__mul__(other)
-        return other
+    def __mul__(self, other: Rep | int) -> Rep:
+        match other:
+            case Rep():
+                return other
+            case int():
+                return super().__mul__(other)
 
-    def __rmul__(self, other):
-        if isinstance(other, int):
-            return super().__rmul__(other)
-        return other
-
-    def concrete(self):
-        return True
-
-    def T(self):
+    def T(self) -> Rep:
         return self
 
 
@@ -304,25 +377,56 @@ class Base(Rep):
         if G is not None:
             self.is_permutation = G.is_permutation
 
-    def __call__(self, G: Group):
+    def __call__(self, G: Group) -> "Base":
         return self.__class__(G)
 
-    def rho(self, M: Union[dict, Any]) -> Union[dict, Any]:
-        if self.concrete and isinstance(M, dict):
-            M = M[self.G]
-        return M
+    def rho(self, g: GroupElem | Dict[Group, torch.Tensor]) -> ReprElem:
+        if isinstance(g, GroupElem):
+            return g
+        if self.G is not None and isinstance(g, dict) and self.G in g:
+            return g[self.G]
+        raise ValueError("M must be a dictionary or a group element")
 
-    def drho(self, A: Union[dict, Any]) -> Union[dict, Any]:
-        if self.concrete and isinstance(A, dict):
-            A = A[self.G]
-        return A
+    def drho(self, A: LieAlgebraElem | Dict[Group, torch.Tensor]) -> ReprElem:
+        if isinstance(A, LieAlgebraElem):
+            return A
+        if self.G is not None and isinstance(A, dict) and self.G in A:
+            return A[self.G]
+        raise ValueError("M must be a dictionary or a Lie algebra element")
 
-    def size(self) -> Optional[int]:
+    @property
+    def constraint_matrix(self) -> LinearOperator:
+        """
+        Get the equivariance constraint matrix.
+        """
         if self.G is None:
-            raise ValueError("Must have G to find size")
+            raise NotImplementedError
+
+        discrete_constraints = [
+            lazify(self.rho(h)) - I(self.size) for h in self.G.discrete_generators
+        ]
+        continuous_constraints = [lazify(self.drho(A)) for A in self.G.lie_algebra]
+        constraints = discrete_constraints + continuous_constraints
+
+        return (
+            LazyConcat(constraints)
+            if constraints
+            else lazify(torch.zeros((1, self.size)))
+        )
+
+    @property
+    def size(self) -> int:
+        if self.G is None:
+            return 0
         return self.G.d
 
-    def __repr__(self) -> Literal["V"]:
+    @property
+    def T(self) -> "Base":
+        if self.G is not None and self.G.is_orthogonal:
+            return self
+        return Dual(self)
+
+    def __repr__(self) -> str:
         return "V"
 
     def __hash__(self) -> int:
@@ -347,37 +451,47 @@ class Dual(Base):
     def __init__(self, rep: Base):
         self.rep = rep
         self.G = rep.G
+
         if hasattr(rep, "is_permutation"):
             self.is_permutation = rep.is_permutation
 
     def __call__(self, G: Group) -> Base:
         return self.rep(G).T
 
-    def rho(self, M):
-        rr = self.rep.rho(M)
-        return rr.invT() if isinstance(rr, LinearOperator) else torch.linalg.inv(rr).T
+    def rho(self, g: GroupElem) -> ReprElem:
+        rr = self.rep.rho(g)
+        match rr:
+            case torch.Tensor():
+                return torch.linalg.inv(rr).T
+            case LinearOperator():
+                return rr.invT()
 
-    def drho(self, A):
+    def drho(self, A: LieAlgebraElem) -> ReprElem:
         return -self.rep.drho(A).T
 
-    def __repr__(self):
+    def __repr__(self) -> str:
         return repr(self.rep) + "*"
 
-    def T(self):
+    @property
+    def T(self) -> Base:
         return self.rep
 
-    def __eq__(self, other):
-        return type(other) == type(self) and self.rep == other.rep
+    def __eq__(self, other: Rep) -> bool:
+        match other:
+            case Dual():
+                return self.rep == other.rep
+        return False
 
-    def __hash__(self):
+    def __hash__(self) -> int:
         return hash((type(self), self.rep))
 
-    def __lt__(self, other):
+    def __lt__(self, other: Rep) -> bool:
         if other == self.rep:
             return False
         return super().__lt__(other)
 
-    def size(self):
+    @property
+    def size(self) -> int:
         return self.rep.size
 
 

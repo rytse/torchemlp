@@ -105,14 +105,14 @@ class Group(ABC):
                 self.is_permutation = True
 
     @property
-    def dense_lie_algebra(self):
+    def dense_lie_algebra(self) -> torch.Tensor:
         return torch.cat([lg.dense for lg in self.lie_algebra], dim=0)
 
     @property
-    def dense_discrete_generators(self):
+    def dense_discrete_generators(self) -> torch.Tensor:
         return torch.cat([dg.dense for dg in self.discrete_generators], dim=0)
 
-    def samples(self, N) -> GroupElems:
+    def samples(self, N: int) -> GroupElems:
         """
         Draw N samples from the group (not necessarily Haar measure)
         """
@@ -215,10 +215,10 @@ class Group(ABC):
         """
         return len(self.lie_algebra) + len(self.discrete_generators)
 
-    def __str__(self):
+    def __str__(self) -> str:
         return repr(self)
 
-    def __repr__(self):
+    def __repr__(self) -> str:
         outstr = f"{self.__class__}"
         if self.args:
             outstr += "(" + "".join(map(repr, self.args)) + ")"
@@ -435,7 +435,7 @@ class Sp(Group):
     The symplectic group Sp(m) in 2m dimensions
     """
 
-    def __init__(self, m):
+    def __init__(self, m: int):
         A_dense = torch.zeros((m * (2 * m + 1), 2 * m, 2 * m))
         self.m = m
 
@@ -464,7 +464,7 @@ class Z(Group):
     The cyclic group Z_n (discrete granslation group)
     """
 
-    def __init__(self, n):
+    def __init__(self, n: int):
         self.discrete_generators = [LazyShift(n)]
         super().__init__(n)
 
@@ -474,7 +474,7 @@ class S(Group):
     The permutation group S_n
     """
 
-    def __init__(self, n):
+    def __init__(self, n: int):
         perms = torch.arange(n)[None].int() + torch.zeros((n - 1, 1)).int()
         perms[:, 0] = torch.arange(1, n)
         perms[torch.arange(n - 1), -torch.arange(1, n)[None]] = 0
@@ -487,7 +487,7 @@ class SL(Group):
     The special linear group SL(n)
     """
 
-    def __init__(self, n):
+    def __init__(self, n: int):
         A_dense = torch.zeros((n * n - 1, n, n))
         k = 0
         for i in range(n):
@@ -510,7 +510,7 @@ class GL(Group):
     The general linear group GL(n)
     """
 
-    def __init__(self, n):
+    def __init__(self, n: int):
         A_dense = torch.zeros((n * n, n, n))
         k = 0
         for i in range(n):
@@ -528,7 +528,7 @@ class U(Group):
     The unitary group U(N), complex
     """
 
-    def __init__(self, n):
+    def __init__(self, n: int):
         lie_algebra_real = torch.zeros((n * n, n, n))
         lie_algebra_imag = torch.zeros((n * n, n, n))
 
@@ -561,7 +561,7 @@ class SU(Group):
     The special unitary group SU(n), complex
     """
 
-    def __init__(self, n):
+    def __init__(self, n: int):
         if n == 1:
             return Trivial(1)
 
@@ -622,7 +622,7 @@ class ZksZnxZn(Group):
     original GCNN groups.
     """
 
-    def __init__(self, k, n):
+    def __init__(self, k: int, n: int):
         Zn = Z(n)
         Zk = Z(k)
 
@@ -648,9 +648,9 @@ class Embed(Group):
     A new group equivalent to an input group embedded in a larger vector space.
     """
 
-    def __init__(self, G, d, slice):
-        A_dense = torch.zeros((G.lie_algebra.shape[0], d, d))
-        h_dense = torch.zeros((G.discrete_generators.shape[0], d, d))
+    def __init__(self, G: Group, d: int, slice: Union[slice, int] = slice(None)):
+        A_dense = torch.zeros((len(G.lie_algebra), d, d))
+        h_dense = torch.zeros((len(G.discrete_generators), d, d))
         h_dense += torch.eye(d)
 
         A_dense[:, slice, slice] = G.dense_lie_algebra
@@ -662,7 +662,7 @@ class Embed(Group):
         self.name = f"{G}_R{d}"
         super().__init__()
 
-    def __repr__(self):
+    def __repr__(self) -> str:
         return self.name
 
 
@@ -708,7 +708,7 @@ class DirectProduct(Group):
         self.names = (repr(G1), repr(G2))
         super().__init__()
 
-    def __repr__(self):
+    def __repr__(self) -> str:
         return f"{self.names[0]}x{self.names[1]}"
 
 
