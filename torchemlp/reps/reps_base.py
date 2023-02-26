@@ -3,12 +3,8 @@ from abc import ABC, abstractmethod
 
 from torchemlp.utils import (
     GroupElem,
-    GroupElems,
     LieAlgebraElem,
-    LieAlgebraElems,
     ReprElem,
-    ReprElems,
-    is_scalar,
 )
 
 from torchemlp.groups import Group
@@ -24,7 +20,7 @@ from torchemlp.ops import densify, lazify
 from reps_utils import dictify_rep
 from reps_solvers import orthogonal_complement, krylov_constraint_solve
 
-from reps_prod_sum import SumRep, DeferredSumRep
+from reps_algebra import SumRep, DeferredSumRep
 
 import torch
 
