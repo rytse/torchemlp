@@ -4,8 +4,6 @@ from abc import ABC, abstractmethod
 import torch
 import functorch
 
-from utils import is_scalar, is_vector, is_matrix
-
 
 class LinearOperator(ABC):
     def __init__(self, dtype, shape: tuple):
@@ -60,7 +58,7 @@ class LinearOperator(ABC):
         return functorch.vmap(self.rmatvec)(B.T).T
 
     def __mul__(
-        self, x: Union["LinearOperator", torch.Tensor, float]
+        self, x: Union["LinearOperator", torch.Tensor, int, float]
     ) -> Union["LinearOperator", torch.Tensor]:
         """
         This python operator overloads the * operator and performs a different
@@ -84,15 +82,20 @@ class LinearOperator(ABC):
         self * x, we are performing a multiplication-like group operation,
         which has several different notations across different fields of math.
         """
-        if isinstance(x, LinearOperator):
-            return _ProductLinearOperator(self, x)
-        elif is_scalar(x):
-            return _ScaledLinearOperator(self, x)
-        elif is_vector(x):
-            return self.matvec(x)
-        elif is_matrix(x):
-            return self.matmat(x)
-        raise ValueError("Unsupported type {}".format(type(x)))
+        match x:
+            case LinearOperator():
+                return _ProductLinearOperator(self, x)
+            case torch.Tensor():
+                if x.ndim == 0:
+                    return _ScaledLinearOperator(self, x)
+                elif x.ndim == 1:
+                    return self.matvec(x)
+                elif x.ndim == 2:
+                    return self.matmat(x)
+                else:
+                    raise NotImplementedError
+            case int() | float():
+                return _ScaledLinearOperator(self, x)
 
     def __call__(
         self, x: Union["LinearOperator", torch.Tensor, float]
@@ -105,7 +108,7 @@ class LinearOperator(ABC):
         return self * x
 
     def __rmul__(
-        self, x: Union["LinearOperator", torch.Tensor, float]
+        self, x: Union["LinearOperator", torch.Tensor, int, float]
     ) -> Union["LinearOperator", torch.Tensor]:
         """
         This python operator overloads right-application (to handle
@@ -115,12 +118,16 @@ class LinearOperator(ABC):
 
         Several other dunder methods are overloaded to perform the same task.
         """
-        if isinstance(x, LinearOperator):
-            return _ProductLinearOperator(x, self)
-        elif is_scalar(x):
-            return _ScaledLinearOperator(self, x)
-        else:
-            return NotImplemented
+        match x:
+            case LinearOperator():
+                return _ProductLinearOperator(x, self)
+            case torch.Tensor():
+                if x.ndim == 0:
+                    return _ScaledLinearOperator(self, x)
+                else:
+                    raise NotImplementedError
+            case int() | float():
+                return _ScaledLinearOperator(self, x)
 
     def __rmatmul__(
         self, x: Union["LinearOperator", torch.Tensor, float]
@@ -131,10 +138,14 @@ class LinearOperator(ABC):
         """
         This python operator overloads the ** operator for scalar p.
         """
-        if is_scalar(p):
-            return _PowerLinearOperator(self, p)
-        else:
-            return NotImplemented
+        match p:
+            case int():
+                return _ScaledLinearOperator(self, p)
+            case torch.Tensor():
+                if p.ndim == 0:
+                    return _ScaledLinearOperator(self, p)
+                else:
+                    raise NotImplementedError
 
     def __add__(self, x: Union["LinearOperator", torch.Tensor]) -> "LinearOperator":
         """
@@ -144,12 +155,14 @@ class LinearOperator(ABC):
 
         Several other dunder methods are overloaded to perform the same task.
         """
-        if isinstance(x, LinearOperator):
-            return _SumLinearOperator(self, x)
-        elif is_matrix(x):
-            return _SumLinearOperator(self, Lazy(x))
-        else:
-            return NotImplemented
+        match x:
+            case LinearOperator():
+                return _SumLinearOperator(self, x)
+            case torch.Tensor():
+                if x.ndim == 2:
+                    return _SumLinearOperator(self, Lazy(x))
+                else:
+                    raise NotImplementedError
 
     def __radd__(self, x: Union["LinearOperator", torch.Tensor]) -> "LinearOperator":
         return self + x
@@ -269,8 +282,6 @@ class _ProductLinearOperator(LinearOperator):
     """
 
     def __init__(self, A: LinearOperator, B: LinearOperator):
-        if not isinstance(A, LinearOperator) or not isinstance(B, LinearOperator):
-            raise ValueError("A and B must be LinearOperators")
         if A.shape[1] != B.shape[0]:
             raise ValueError("A and B must have composable shapes")
         if A.dtype != B.dtype:
@@ -311,17 +322,17 @@ class _ScaledLinearOperator(LinearOperator):
     """
 
     def __init__(self, A: LinearOperator, c: Union[float, int, torch.Tensor]):
-        if not isinstance(A, LinearOperator):
-            raise ValueError("A must be a LinearOperator")
-        if not is_scalar(c):
-            raise ValueError("c must be a scalar")
-
         super(_ScaledLinearOperator, self).__init__(A.dtype, A.shape)
         self.A = A
-        if isinstance(c, torch.Tensor):
-            self.c = c
-        else:
-            self.c = torch.Tensor(c)
+
+        match c:
+            case float():
+                self.c = torch.tensor(c, dtype=A.dtype)
+            case int():
+                self.c = torch.tensor(c, dtype=A.dtype)
+            case torch.Tensor():
+                self.c = c
+
         self.args = (A, c)
 
     def matvec(self, x: torch.Tensor) -> torch.Tensor:
@@ -352,18 +363,22 @@ class _PowerLinearOperator(LinearOperator):
     """
 
     def __init__(self, A: LinearOperator, p: Union[int, torch.Tensor]):
-        if not isinstance(A, LinearOperator):
-            raise ValueError("A must be a LinearOperator")
         if A.shape[0] != A.shape[1]:
             raise ValueError("A must be a square operator")
-        if not isinstance(p, int):
-            raise ValueError("p must be an int")
         if p < 0:
             raise ValueError("p must be non-negative")
 
         super(_PowerLinearOperator, self).__init__(A.dtype, A.shape)
+
+        match p:
+            case int():
+                self.p = p
+            case torch.Tensor():
+                if p.ndim == 0:
+                    self.p = p
+                raise ValueError("p must be a scalar")
+
         self.A = A
-        self.p = p
         self.args = (A, p)
 
     def power(self, fun: Callable, x: Any) -> Any:

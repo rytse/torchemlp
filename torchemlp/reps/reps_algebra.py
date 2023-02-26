@@ -6,7 +6,6 @@ import torch
 
 from reps_base import Rep, ScalarRep, Scalar
 
-from torchemlp.utils import is_scalar
 from torchemlp.ops import (
     LinearOperator,
     LazyPerm,
