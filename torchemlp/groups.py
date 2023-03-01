@@ -17,10 +17,10 @@ from torchemlp.ops import (
 )
 
 
-def rel_err(A: LinearOperator, B: LinearOperator, epsilon: float = 1e-6):
-    mad = torch.mean(torch.abs(A.dense - B.dense))  # mean abs diff
-    ama = torch.mean(torch.abs(A.dense))  # a mean abs
-    bma = torch.mean(torch.abs(B.dense))  # b mean abs
+def rel_err(A: torch.Tensor, B: torch.Tensor, epsilon: float = 1e-6) -> torch.Tensor:
+    mad = torch.mean(torch.abs(A - B))  # mean abs diff
+    ama = torch.mean(torch.abs(A))  # a mean abs
+    bma = torch.mean(torch.abs(B))  # b mean abs
     return mad / (ama + bma + epsilon)
 
 
@@ -77,22 +77,17 @@ class Group(ABC):
             else:
                 raise NotImplementedError("No generators found")
 
-        # Fill in missing generators
-        # if len(self.lie_algebra) == 0:
-        # self.lie_algebra = [MatrixLinearOperator(torch.zeros((0, self.d, self.d)))]
-        # if len(self.discrete_generators) == 0:
-        # self.discrete_generators = [MatrixLinearOperator(torch.zeros((0, self.d, self.d)))]
-
         # Check orthogonal flag
         if self.is_permutation:
             self.is_orthogonal = True
-        if (
-            len(self.lie_algebra) > 0
-            and all([rel_err(lg.H, lg) < epsilon for lg in self.lie_algebra])
-            or len(self.discrete_generators) > 0
-            and all([rel_err(dg.H, dg) < epsilon for dg in self.discrete_generators])
-        ):
-            self.is_orthogonal = True
+        if len(self.lie_algebra) > 0:
+            A_dense = torch.stack([A.dense for A in self.lie_algebra])
+            if rel_err(-torch.transpose(A_dense, 2, 1), A_dense) < epsilon:
+                self.is_orthogonal = True
+        elif len(self.discrete_generators) > 0:
+            h_dense = torch.stack([h.dense for h in self.discrete_generators])
+            if rel_err(-torch.transpose(h_dense, 2, 1), h_dense) < epsilon:
+                self.is_orthogonal = True
 
         # Check permutation flag
         if (
@@ -106,15 +101,15 @@ class Group(ABC):
 
     @property
     def dense_lie_algebra(self) -> torch.Tensor:
-        return torch.cat([lg.dense for lg in self.lie_algebra], dim=0)
+        return torch.stack([lg.dense for lg in self.lie_algebra])
 
     @property
     def dense_discrete_generators(self) -> torch.Tensor:
-        return torch.cat([dg.dense for dg in self.discrete_generators], dim=0)
+        return torch.stack([dg.dense for dg in self.discrete_generators])
 
-    def samples(self, N: int) -> GroupElems:
+    def sample(self) -> GroupElem:
         """
-        Draw N samples from the group (not necessarily Haar measure)
+        Draw a single sample from the group (not necessarily Haar measure)
         """
 
         n_lie_bases = len(self.lie_algebra)
@@ -137,17 +132,14 @@ class Group(ABC):
             raise NotImplementedError("No generators found")
 
         # Sampling noise
-        z = self.z_scale * torch.randn(N, n_lie_bases)  # continous samples
-        ks = torch.randint(-5, 5, size=(N, n_discrete_gens, 3))  # discrete samples
+        z = self.z_scale * torch.randn(n_lie_bases)  # continous samples
+        ks = torch.randint(-5, 5, size=(h_dense.shape[0], 3))  # discrete samples
 
         # Generate samples
         return self.__class__.noise2sample(z, ks, A_dense, h_dense)
 
-    def sample(self) -> GroupElem:
-        """
-        Draw a single sample from the group (not necessarily Haar measure)
-        """
-        return self.samples(1)[0]
+    def samples(self, N) -> list[GroupElem]:
+        return [self.sample() for _ in range(N)]  # TODO batch
 
     @staticmethod
     def noise2sample(
@@ -169,7 +161,7 @@ class Group(ABC):
 
         # Output group element that will be mutated to its final state via action by the
         # continuous and discrete group generators
-        g = torch.eye(A_dense.shape[0], dtype=A_dense.dtype, device=A_dense.device)
+        g = torch.eye(A_dense.shape[-1])
 
         # If there are continuous generators, take exp(z * A)
         if A_dense.shape[0]:
@@ -185,30 +177,6 @@ class Group(ABC):
                     g = g @ torch.matrix_power(h_dense[i], int(ks[i, k]))
         return g
 
-    @staticmethod
-    def noise2samples(
-        zs: torch.Tensor, ks: torch.Tensor, A_dense: torch.Tensor, h_dense: torch.Tensor
-    ) -> GroupElems:
-        """
-        Method for drawing samples from the group by applying random discrete
-        generators and exponentiating random Lie algebra basis vectors.
-
-        Draws many samples at a time by vmapping noise2sample.
-
-        Args:
-            zs: Direction in Lie algebra to travel in, i.e. exp(zA)
-            ks: Number of times to apply each discrete generator
-            A: Lie algebra basis vectors as a dense tensor
-            h: Discrete generators as a dense tensor
-
-        Returns:
-            Samples from the group
-        """
-
-        return functorch.vmap(Group.noise2sample, (0, 0, None, None), 0)(
-            zs, ks, A_dense, h_dense
-        )
-
     def get_num_constraints(self) -> int:
         """
         Get the number of constraints of the group (i.e. the total number of basis elements)
@@ -219,7 +187,7 @@ class Group(ABC):
         return repr(self)
 
     def __repr__(self) -> str:
-        outstr = f"{self.__class__}"
+        outstr = f"{self.__class__.__name__}"
         if self.args:
             outstr += "(" + "".join(map(repr, self.args)) + ")"
         return outstr

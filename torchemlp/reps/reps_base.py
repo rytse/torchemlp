@@ -1,6 +1,8 @@
 from abc import ABC, abstractmethod
 from typing import Optional, Dict, Tuple, Union, Generator
-from functools import lru_cache
+from functools import lru_cache, reduce
+from collections import defaultdict
+import itertools
 
 import torch
 
@@ -12,11 +14,17 @@ from torchemlp.utils import (
 
 from torchemlp.groups import Group
 from torchemlp.ops import (
+    lazy_direct_matmat,
+    product,
     LinearOperator,
     ZeroOperator,
     I,
+    LazyKron,
+    LazyKronsum,
+    LazyDirectSum,
     LazyJVP,
     LazyConcat,
+    LazyPerm,
 )
 from torchemlp.ops import densify, lazify
 
@@ -115,18 +123,20 @@ class Rep(ABC):
         """
         Get the equivariance constraint matrix.
         """
-        n = self.size
-        constraints = []
+        if self.G is None:
+            raise NotImplementedError
 
-        if self.G is not None:
-            for h in self.G.discrete_generators:
-                constraints.append(lazify(self.rho(h) - I(n)))
-            for A in self.G.lie_algebra:
-                constraints.append(lazify(self.drho(A) - I(n)))
+        discrete_constraints = [
+            lazify(self.rho(h)) - I(self.size) for h in self.G.discrete_generators
+        ]
+        continuous_constraints = [lazify(self.drho(A)) for A in self.G.lie_algebra]
+        constraints = discrete_constraints + continuous_constraints
 
-        if len(constraints) > 0:
-            return LazyConcat(*constraints)
-        return ZeroOperator()
+        return (
+            LazyConcat(constraints)
+            if constraints
+            else lazify(torch.zeros((1, self.size)))
+        )
 
     def equivariant_basis(self) -> LinearOperator:
         """
@@ -145,7 +155,7 @@ class Rep(ABC):
                 result = krylov_constraint_solve(C)
             self.__class__.solcache[canon_rep] = lazify(result)
 
-        if invperm == perm:
+        if all(invperm == perm):
             return self.__class__.solcache[canon_rep]
         return lazify(self.__class__.solcache[canon_rep].dense[invperm])
 
@@ -249,10 +259,8 @@ class Rep(ABC):
         Compute the iterated tensor product of representations.
         """
         assert other >= 0, "Power only supported for non-negative integers"
-        out = Scalar
-        for _ in range(other):
-            out = out * self
-        return out
+        prodlist = [self for _ in range(other)]
+        return reduce(lambda a, b: a * b, prodlist)
 
     def __rshift__(self, other: int) -> "Rep":
         """
@@ -296,6 +304,7 @@ class Rep(ABC):
 
     @property
     def T(self) -> "Rep":
+        breakpoint()
         if self.G is not None and self.G.is_orthogonal:
             return self
         raise NotImplementedError
@@ -324,7 +333,6 @@ class ZeroRep(Rep):
     def size(self) -> int:
         return 0
 
-    @property
     def constraint_matrix(self) -> LinearOperator:
         return ZeroOperator()
 
@@ -380,13 +388,14 @@ class OpRep(Rep, ABC):
                         )
 
                 self.counters, self.perm = self.__class__.compute_canonical(
-                    [reps], perm
+                    [reps], (perm,)
                 )
 
             case list():
                 # Canonicalize each rep to be multiplied
                 canreps, perms = zip(*[rep.canonicalize() for rep in reps])
-                if not isinstance(perms, torch.Tensor):  # comfort the type checker
+
+                if not all(isinstance(perm, torch.Tensor) for perm in perms):
                     raise ValueError("Permutation must be a torch.Tensor")
 
                 # Dict containing the set of unique Reps in the multiplication
@@ -394,7 +403,7 @@ class OpRep(Rep, ABC):
                 in_counters = []
                 for rep in canreps:
                     match rep:
-                        case ProductRep():
+                        case self.__class__():
                             in_counters.append(rep.counters)
                         case Rep():
                             in_counters.append({rep: 1})
@@ -422,7 +431,7 @@ class OpRep(Rep, ABC):
     @staticmethod
     @abstractmethod
     def compute_canonical(
-        reps: list[dict[Rep, int]], perm: torch.Tensor
+        reps: list[dict[Rep, int]], perm: tuple[torch.Tensor]
     ) -> Tuple[dict[Rep, int], torch.Tensor]:
         """
         Compute the canonical order of the reps in the list of reps to sum over.
@@ -454,6 +463,7 @@ class OpRep(Rep, ABC):
         """
         Swap to adjoint representation without reordering elements.
         """
+        breakpoint()
         return self.__class__(
             [rep.T for rep, c in self.counters.items() for _ in range(c)], self.perm
         )
@@ -475,7 +485,7 @@ class OpRep(Rep, ABC):
 
     def __eq__(self, other: Rep) -> bool:
         match other:
-            case OpRep():
+            case self.__class__():
                 return self.counters == other.counters and bool(
                     torch.all(self.perm == other.perm)
                 )
@@ -511,7 +521,7 @@ class SumRep(OpRep):
 
     @staticmethod
     def compute_canonical(
-        counters: list[dict[Rep, int]], perms: torch.Tensor
+        counters: list[dict[Rep, int]], perms: tuple[torch.Tensor]
     ) -> tuple[dict[Rep, int], torch.Tensor]:
         """
         Compute the canonical order of the reps in the list of reps to sum over.
@@ -550,7 +560,8 @@ class SumRep(OpRep):
         for rep in can_reps:
             for i in range(len(counters)):
                 c = counters[i].get(rep, 0)
-                permlist.append(shifted_perms[i][ids[i] : ids[i] + c * rep.size])
+                new_perm = shifted_perms[i][ids[i] : ids[i] + c * rep.size]
+                permlist.extend(new_perm.tolist())
                 ids[i] += +c * rep.size
                 merged_counters[rep] += c
 
@@ -785,7 +796,7 @@ class ProductRep(OpRep):
 
     @staticmethod
     def compute_canonical(
-        counters: list[dict[Rep, int]], perms: torch.Tensor
+        counters: list[dict[Rep, int]], perms: tuple[torch.Tensor]
     ) -> tuple[dict[Rep, int], torch.Tensor]:
         """
         Compute the canonical order of the reps in the list of reps to multiply
@@ -833,7 +844,7 @@ class ProductRep(OpRep):
             for i in range(len(perms)):
                 c = counters[i].get(rep, 0)
                 if c != 0:
-                    permlist.append(ids[i][rep])
+                    permlist.extend(ids[i][rep].tolist())
                     merged_counters[rep] += c
 
         order = order.reshape(
@@ -844,8 +855,8 @@ class ProductRep(OpRep):
                 for _ in range(c)
             )
         )
-        order = torch.permute(order, permlist).reshape(-1)
 
+        order = torch.permute(order, permlist).reshape(-1)
         return merged_counters, order
 
     @property
@@ -945,11 +956,12 @@ class DeferredOpRep(Rep, ABC):
     """
 
     def __init__(self, reps: list[Rep]):
+        self.G = None
         self.to_op: list[Rep] = []
 
         for rep in reps:
             match rep:
-                case DeferredOpRep():
+                case self.__class__():
                     self.to_op.extend(rep.to_op)
                 case _:
                     self.to_op.append(rep)
@@ -987,7 +999,8 @@ class DeferredSumRep(DeferredOpRep):
 
     def __call__(self, G: Optional[Group]) -> Rep:
         if G is None:
-            return self.__class__(self.to_op)
+            # return self.__class__(self.to_op)
+            return self
         return SumRep([rep(G) for rep in self.to_op])
 
     def __repr__(self):
@@ -1007,7 +1020,8 @@ class DeferredProductRep(DeferredOpRep):
 
     def __call__(self, G: Optional[Group]) -> Rep:
         if G is None:
-            return self.__class__(self.to_op)
+            # return self.__class__(self.to_op)
+            return self
         return reduce(lambda a, b: a * b, [rep(G) for rep in self.to_op])
 
     def __repr__(self):
@@ -1037,7 +1051,6 @@ class ScalarRep(Rep):
     def drho(self, A: LieAlgebraElem) -> ReprElem:
         return 0 * torch.eye(1)
 
-    @property
     def constraint_matrix(self) -> LinearOperator:
         raise NotImplementedError
 
@@ -1090,26 +1103,6 @@ class Base(Rep):
         if self.G is not None and isinstance(A, dict) and self.G in A:
             return A[self.G]
         raise ValueError("M must be a dictionary or a Lie algebra element")
-
-    @property
-    def constraint_matrix(self) -> LinearOperator:
-        """
-        Get the equivariance constraint matrix.
-        """
-        if self.G is None:
-            raise NotImplementedError
-
-        discrete_constraints = [
-            lazify(self.rho(h)) - I(self.size) for h in self.G.discrete_generators
-        ]
-        continuous_constraints = [lazify(self.drho(A)) for A in self.G.lie_algebra]
-        constraints = discrete_constraints + continuous_constraints
-
-        return (
-            LazyConcat(constraints)
-            if constraints
-            else lazify(torch.zeros((1, self.size)))
-        )
 
     @property
     def size(self) -> int:

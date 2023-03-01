@@ -26,7 +26,7 @@ class LinearOperator(ABC):
         linear operator (or matrix). This will call a vectorized version of
         matvec unless you overload it with something faster.
         """
-        return functorch.vmap(self.matvec)(B.T).T
+        return torch.hstack([self.matvec(col.reshape(-1, 1)) for col in B.T])
 
     def adjoint(self) -> "LinearOperator":
         return _AdjointLinearOperator(self)
@@ -49,6 +49,8 @@ class LinearOperator(ABC):
         If you need performance, overload this with a custom implemntation that
         doesn't recompute self.H every time.
         """
+        if type(self).adjoint == LinearOperator.adjoint:
+            raise NotImplementedError  # infinite recursion
         return self.H.matvec(x)
 
     def rmatmat(self, B: torch.Tensor) -> torch.Tensor:
@@ -57,7 +59,9 @@ class LinearOperator(ABC):
         linear operator (or matrix). This will call a vectorized version of
         rmatvec unless you overload it with something faster.
         """
-        return functorch.vmap(self.rmatvec)(B.T).T
+        if type(self).adjoint == LinearOperator.adjoint:
+            return torch.hstack([self.rmatvec(col.reshape(-1, 1)) for col in B.T])
+        return self.H.matmat(B)
 
     def __mul__(
         self, x: Union["LinearOperator", torch.Tensor, int, float]
@@ -104,14 +108,14 @@ class LinearOperator(ABC):
     ) -> Union["LinearOperator", torch.Tensor]:
         return self * x
 
-    def __matmul__(
-        self, x: Union["LinearOperator", torch.Tensor, float]
-    ) -> Union["LinearOperator", torch.Tensor]:
-        return self * x
+    def __matmul__(self, x: torch.Tensor) -> torch.Tensor:
+        mm = self.__mul__(x)
+        match mm:
+            case torch.Tensor():
+                return mm
+        raise NotImplementedError
 
-    def __rmul__(
-        self, x: Union["LinearOperator", torch.Tensor, int, float]
-    ) -> Union["LinearOperator", torch.Tensor]:
+    def __rmul__(self, x: torch.Tensor | int | float) -> "LinearOperator":
         """
         This python operator overloads right-application (to handle
         non-commutative operators). This only works for LinearOperators and
@@ -121,8 +125,6 @@ class LinearOperator(ABC):
         Several other dunder methods are overloaded to perform the same task.
         """
         match x:
-            case LinearOperator():
-                return _ProductLinearOperator(x, self)
             case torch.Tensor():
                 if x.ndim == 0:
                     return _ScaledLinearOperator(self, x)
@@ -131,10 +133,12 @@ class LinearOperator(ABC):
             case int() | float():
                 return _ScaledLinearOperator(self, x)
 
-    def __rmatmul__(
-        self, x: Union["LinearOperator", torch.Tensor, float]
-    ) -> Union["LinearOperator", torch.Tensor]:
-        return x * self
+    def __rmatmul__(self, x: torch.Tensor) -> torch.Tensor:
+        rmm = self.__rmul__(x)
+        match rmm:
+            case torch.Tensor():
+                return rmm
+        raise NotImplementedError
 
     def __pow__(self, p: Union[int, torch.Tensor]):
         """
@@ -142,10 +146,10 @@ class LinearOperator(ABC):
         """
         match p:
             case int():
-                return _ScaledLinearOperator(self, p)
+                return _PowerLinearOperator(self, p)
             case torch.Tensor():
                 if p.ndim == 0:
-                    return _ScaledLinearOperator(self, p)
+                    return _PowerLinearOperator(self, p)
                 else:
                     raise NotImplementedError
 
@@ -167,13 +171,13 @@ class LinearOperator(ABC):
                     raise NotImplementedError
 
     def __radd__(self, x: Union["LinearOperator", torch.Tensor]) -> "LinearOperator":
-        return self + x
+        return self.__add__(x)
 
     def __neg__(self) -> "LinearOperator":
         return _ScaledLinearOperator(self, -1)
 
     def __sub__(self, x: Union["LinearOperator", torch.Tensor]) -> "LinearOperator":
-        return self + (-x)
+        return self.__add__(-x)
 
     def __repr__(self) -> str:
         M, N = self.shape
@@ -366,6 +370,7 @@ class _ScaledLinearOperator(LinearOperator):
     def invT(self) -> LinearOperator:
         return 1.0 / self.c * self.A.T
 
+    @property
     def dense(self) -> torch.Tensor:
         return self.c * self.A.dense
 

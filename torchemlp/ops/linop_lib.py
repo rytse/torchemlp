@@ -38,6 +38,7 @@ class LazyKron(LinearOperator):
     def invT(self) -> LinearOperator:
         return LazyKron([Mi.invT() for Mi in self.Ms])
 
+    @property
     def dense(self) -> torch.Tensor:
         Ms_dense = [M.dense if isinstance(M, LinearOperator) else M for M in self.Ms]
         return reduce(torch.kron, Ms_dense)  # reducing via kronecker product
@@ -71,6 +72,7 @@ class LazyKronsum(LinearOperator):
     def adjoint(self) -> LinearOperator:
         return LazyKronsum([Mi.H for Mi in self.Ms])
 
+    @property
     def dense(self) -> torch.Tensor:
         Ms_dense = [M.dense if isinstance(M, LinearOperator) else M for M in self.Ms]
         return reduce(kronsum, Ms_dense)  # reducing via kronecker sum
@@ -145,6 +147,7 @@ class LazyConcat(LinearOperator):
         MHBs = [self.Ms[i].H @ Bs[i] for i in range(len(self.Ms))]
         return reduce(lambda x, y: x + y, MHBs)
 
+    @property
     def dense(self) -> torch.Tensor:
         Ms_dense = [M.dense if isinstance(M, LinearOperator) else M for M in self.Ms]
         return torch.cat(Ms_dense, dim=0)
@@ -175,6 +178,7 @@ class LazyDirectSum(LinearOperator):
     def invT(self) -> LinearOperator:
         return LazyDirectSum([Mi.invT() for Mi in self.Ms], self.mults)
 
+    @property
     def dense(self) -> torch.Tensor:
         Ms_all = [M for M, c in zip(self.Ms, self.mults) for _ in range(c)]
         Ms_dense = [Mi.dense if isinstance(Mi, LinearOperator) else Mi for Mi in Ms_all]
