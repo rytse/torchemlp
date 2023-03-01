@@ -4,7 +4,7 @@ from abc import ABC, abstractmethod
 import torch
 import functorch
 
-from torchemlp.ops import densify, lazify
+import torchemlp.ops
 
 
 class LinearOperator(ABC):
@@ -321,7 +321,7 @@ class _ProductLinearOperator(LinearOperator):
                 case LinearOperator():
                     return res
                 case torch.Tensor():
-                    return lazify(res)
+                    return torchemlp.ops.lazify(res)
         raise NotImplementedError
 
     @property

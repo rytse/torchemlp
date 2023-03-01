@@ -4,8 +4,8 @@ from typing import Union, List, Callable
 import torch
 import torch.autograd.functional as F
 
-from linop_base import LinearOperator
-from linop_utils import product, kronsum, lazy_direct_matmat
+from .linop_base import LinearOperator
+from .linop_utils import product, kronsum, lazy_direct_matmat
 
 
 class LazyKron(LinearOperator):

@@ -3,7 +3,7 @@ from typing import Union, List, Any
 
 import torch
 
-from linop_base import LinearOperator, Lazy
+from .linop_base import LinearOperator, Lazy
 
 
 def product(L: Any) -> Any:
