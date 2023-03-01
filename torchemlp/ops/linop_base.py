@@ -4,6 +4,8 @@ from abc import ABC, abstractmethod
 import torch
 import functorch
 
+from torchemlp.ops import densify, lazify
+
 
 class LinearOperator(ABC):
     def __init__(self, dtype, shape: tuple):
@@ -187,7 +189,12 @@ class LinearOperator(ABC):
         Convert the lazy implementation of the linear operator to a matrix
         representing the operator in R^n.
         """
-        return self @ torch.eye(self.shape[-1])
+        res = self @ torch.eye(self.shape[-1])
+        match res:
+            case LinearOperator():
+                return res.dense
+            case torch.Tensor():
+                return res
 
 
 class _AdjointLinearOperator(LinearOperator):
@@ -309,10 +316,16 @@ class _ProductLinearOperator(LinearOperator):
 
     def invT(self) -> LinearOperator:
         if hasattr(self.A, "invT") and hasattr(self.B, "invT"):
-            return self.A.invT() * self.B.invT()
+            res = self.A.invT() * self.B.invT()
+            match res:
+                case LinearOperator():
+                    return res
+                case torch.Tensor():
+                    return lazify(res)
         raise NotImplementedError
 
-    def to_dense(self) -> LinearOperator:
+    @property
+    def dense(self) -> torch.Tensor:
         return self.A.dense @ self.B.dense
 
 
@@ -347,13 +360,13 @@ class _ScaledLinearOperator(LinearOperator):
     def rmatmat(self, x: torch.Tensor) -> torch.Tensor:
         return torch.conj(self.c) * self.A.rmatmat(x)
 
-    def adjoint(self):
+    def adjoint(self) -> LinearOperator:
         return torch.conj(self.c) * self.A.H
 
-    def invT(self):
+    def invT(self) -> LinearOperator:
         return 1.0 / self.c * self.A.T
 
-    def to_dense(self):
+    def dense(self) -> torch.Tensor:
         return self.c * self.A.dense
 
 
@@ -506,7 +519,8 @@ class Lazy(LinearOperator):
     def rmatmat(self, x: torch.Tensor) -> torch.Tensor:
         return self.A.H @ x
 
-    def to_dense(self) -> torch.Tensor:
+    @property
+    def dense(self) -> torch.Tensor:
         return self.A
 
     def invT(self) -> LinearOperator:

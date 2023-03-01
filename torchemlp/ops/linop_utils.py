@@ -11,21 +11,21 @@ def product(L: Any) -> Any:
 
 
 def lazify(op: Union[LinearOperator, torch.Tensor]) -> LinearOperator:
-    if isinstance(op, LinearOperator):
-        return op
-    elif isinstance(op, torch.Tensor):
-        return Lazy(op)
-    else:
-        return NotImplemented
+    match op:
+        case LinearOperator():
+            return op
+        case torch.Tensor():
+            return Lazy(op)
+    return NotImplemented
 
 
 def densify(op: Union[LinearOperator, torch.Tensor]) -> torch.Tensor:
-    if isinstance(op, LinearOperator):
-        return op.dense
-    elif isinstance(op, torch.Tensor):
-        return op
-    else:
-        return NotImplemented
+    match op:
+        case LinearOperator():
+            return op.dense
+        case torch.Tensor():
+            return op
+    return NotImplemented
 
 
 def kronsum(A_dense: torch.Tensor, B_dense: torch.Tensor) -> torch.Tensor:

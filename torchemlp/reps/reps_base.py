@@ -20,7 +20,7 @@ from torchemlp.ops import densify, lazify
 from reps_utils import dictify_rep
 from reps_solvers import orthogonal_complement, krylov_constraint_solve
 
-from reps_algebra import SumRep, DeferredSumRep
+from reps_algebra import SumRep, ProductRep, DeferredSumRep, DeferredProductRep
 
 import torch
 
@@ -35,7 +35,7 @@ class Rep(ABC):
     """
 
     # Cache of canonicalized reps of the Rep class (used by the EMLP solver)
-    solcache: Dict["Rep", torch.Tensor] = dict()
+    solcache: Dict["Rep", LinearOperator] = dict()
 
     is_permutation: bool = False
 
@@ -52,7 +52,6 @@ class Rep(ABC):
         """
         pass
 
-    @abstractmethod
     def drho(self, A: LieAlgebraElem) -> ReprElem:
         """
         Calculate the Lie algebra representation of an input matrix A.
@@ -66,7 +65,11 @@ class Rep(ABC):
         return LazyJVP(self.rho, I, A_dense)
 
     @abstractmethod
-    def __call__(self, gA: GroupElem | LieAlgebraElem) -> ReprElem:
+    def __call__(self, G: Group) -> "Rep":
+        """
+        Construct the representation of a given group using the
+        current representation.
+        """
         pass
 
     @abstractmethod
@@ -109,16 +112,24 @@ class Rep(ABC):
     def drho_dense(self, A: LieAlgebraElem) -> torch.Tensor:
         return densify(self.drho(A))
 
-    @property
-    @abstractmethod
     def constraint_matrix(self) -> LinearOperator:
         """
         Get the equivariance constraint matrix.
         """
-        pass
+        n = self.size
+        constraints = []
 
-    @property
-    def equivariant_basis(self) -> torch.Tensor:
+        if self.G is not None:
+            for h in self.G.discrete_generators:
+                constraints.append(lazify(self.rho(h) - I(n)))
+            for A in self.G.lie_algebra:
+                constraints.append(lazify(self.drho(A) - I(n)))
+
+        if len(constraints) > 0:
+            return LazyConcat(*constraints)
+        return ZeroOperator()
+
+    def equivariant_basis(self) -> LinearOperator:
         """
         Get the equivariant solution basis for the given representation via its
         canonicalization. Caches each canonicalization to a class variable.
@@ -128,21 +139,22 @@ class Rep(ABC):
         invperm = torch.argsort(perm)
 
         if canon_rep not in self.__class__.solcache:
-            C = canon_rep.constraint_matrix
-            if C.shape[0] * C.shape[1] > 3e7:  # too large to use SVD
-                result = krylov_constraint_solve(C)
-            else:
+            C = canon_rep.constraint_matrix()
+            if C.shape[0] * C.shape[1] < 3e7:  # SVD
                 result = orthogonal_complement(C.dense)
-            self.__class__.solcache[canon_rep] = result
+            else:  # too big for SVD, use iterative krylov solver
+                result = krylov_constraint_solve(C)
+            self.__class__.solcache[canon_rep] = lazify(result)
 
-        return self.__class__.solcache[canon_rep][invperm]
+        if invperm == perm:
+            return self.__class__.solcache[canon_rep]
+        return lazify(self.__class__.solcache[canon_rep].dense[invperm])
 
-    @property
     def equivariant_projector(self) -> LinearOperator:
         """
         Computes Q @ Q.H lazily to project onto the equivariant basis.
         """
-        Q_lazy = lazify(self.equivariant_basis)
+        Q_lazy = self.equivariant_basis
         return Q_lazy @ Q_lazy.H
 
     def __add__(self, other: Union["Rep", int, torch.Tensor]) -> "Rep":
@@ -153,8 +165,8 @@ class Rep(ABC):
         match other:
             case Rep():
                 if self.G is not None and other.G is not None:
-                    return SumRep(self, other)
-                return DeferredSumRep(self, other)
+                    return SumRep([self, other])
+                return DeferredSumRep([self, other])
             case int():
                 if other == 0:
                     return self
@@ -174,8 +186,8 @@ class Rep(ABC):
         match other:
             case Rep():
                 if self.G is not None and other.G is not None:
-                    return SumRep(other, self)
-                return DeferredSumRep(other, self)
+                    return SumRep([other, self])
+                return DeferredSumRep([other, self])
             case int():
                 if other == 0:
                     return self
@@ -196,8 +208,8 @@ class Rep(ABC):
         match x:
             case Rep():
                 if self.G is not None and x.G is not None:
-                    return ProductRep(self, x)
-                return DeferredProductRep(self, x)
+                    return ProductRep([self, x])
+                return DeferredProductRep([self, x])
 
             case int():
                 assert x >= 0, "Cannot multiply negative number of times"
@@ -207,8 +219,8 @@ class Rep(ABC):
                 elif x == 0:
                     return ZeroRep()
                 elif self.G is not None:
-                    return SumRep(*(x * [self]))
-                return DeferredSumRep(self, x)
+                    return SumRep([self for _ in range(x)])
+                return DeferredSumRep([self for _ in range(x)])
 
     def __rmul__(self, x: Union["Rep", int]) -> "Rep":
         """
@@ -219,8 +231,8 @@ class Rep(ABC):
         match x:
             case Rep():
                 if self.G is not None and x.G is not None:
-                    return ProductRep(x, self)
-                return DeferredProductRep(x, self)
+                    return ProductRep([x, self])
+                return DeferredProductRep([x, self])
 
             case int():
                 assert x >= 0, "Cannot multiply negative number of times"
@@ -230,8 +242,8 @@ class Rep(ABC):
                 elif x == 0:
                     return ZeroRep()
                 elif self.G is not None:
-                    return SumRep(*(x * [self]))
-                return DeferredSumRep(x, self)
+                    return SumRep([self for _ in range(x)])
+                return DeferredSumRep([self for _ in range(x)])
 
     def __pow__(self, other: int) -> "Rep":
         """
@@ -301,8 +313,10 @@ class ZeroRep(Rep):
     def drho(self, A: LieAlgebraElem) -> ReprElem:
         return torch.zeros(A.shape, dtype=A.dtype)
 
-    def __call__(self, g: GroupElem | LieAlgebraElem) -> ReprElem:
-        return torch.zeros(g.shape, dtype=g.dtype)
+    def __call__(self, G: Group) -> Rep:
+        # return self
+        # TODO CHECK THAT ITS OK TO RETURN A NEW REPRESENTATION, NOT A COPY
+        return ZeroRep()
 
     def __repr__(self) -> str:
         return "0V"
@@ -322,8 +336,10 @@ class ScalarRep(Rep):
         self.is_permutation = True
 
     def __call__(self, G: Optional[Group]) -> Rep:
-        self.G = G
-        return self
+        # self.G = G
+        # return self
+        # TODO CHECK THAT ITS OK TO RETURN A NEW REPRESENTATION, NOT A COPY
+        return ScalarRep(G)
 
     def size(self) -> int:
         return 1
@@ -374,7 +390,8 @@ class Base(Rep):
             self.is_permutation = G.is_permutation
 
     def __call__(self, G: Group) -> "Base":
-        return self.__class__(G)
+        # return self.__class__(G)
+        return Base(G)
 
     def rho(self, g: GroupElem | Dict[Group, torch.Tensor]) -> ReprElem:
         if isinstance(g, GroupElem):
@@ -447,9 +464,7 @@ class Dual(Base):
     def __init__(self, rep: Base):
         self.rep = rep
         self.G = rep.G
-
-        if hasattr(rep, "is_permutation"):
-            self.is_permutation = rep.is_permutation
+        self.is_permutation = rep.is_permutation
 
     def __call__(self, G: Group) -> Base:
         return self.rep(G).T
