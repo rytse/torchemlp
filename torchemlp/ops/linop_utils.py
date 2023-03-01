@@ -43,7 +43,14 @@ def lazy_direct_matmat(
     y = []
     for M, multiplicity in zip(Ms, mults):
         i_end = i + multiplicity * M.shape[-1]
-        elems = M @ v[i:i_end].T.reshape(k * int(multiplicity), M.shape[-1]).T
+        v_slice = v[i:i_end]
+
+        if v_slice.ndim == 2:
+            v_slice = v_slice.T
+
+        v_slice = v_slice.reshape(k * int(multiplicity), M.shape[-1]).T
+        elems = M @ v_slice
+
         y.append(elems.T.reshape(k, int(multiplicity) * M.shape[0]).T)
         i = i_end
 

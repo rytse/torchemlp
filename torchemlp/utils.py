@@ -19,3 +19,7 @@ LieAlgebraElem = Union[torch.Tensor, LinearOperator]
 # Has the same python type as GroupElem(s) and LieAlgebraElem(s), but we define
 # them differently so that our methods' type signatures are more helpful.
 ReprElem = Union[torch.Tensor, LinearOperator]
+
+
+def merge_torch_types(dtype1, dtype2):
+    return (torch.ones(1, dtype=dtype1) * torch.ones(1, dtype=dtype2)).dtype

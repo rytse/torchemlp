@@ -5,6 +5,7 @@ import torch
 import functorch
 
 import torchemlp.ops
+import torchemlp.utils
 
 
 class LinearOperator(ABC):
@@ -37,9 +38,6 @@ class LinearOperator(ABC):
         return _TransposedLinearOperator(self)
 
     T = property(transpose)
-
-    def invT(self) -> "LinearOperator":
-        raise NotImplementedError
 
     def rmatvec(self, x: torch.Tensor) -> torch.Tensor:
         """
@@ -108,12 +106,8 @@ class LinearOperator(ABC):
     ) -> Union["LinearOperator", torch.Tensor]:
         return self * x
 
-    def __matmul__(self, x: torch.Tensor) -> torch.Tensor:
-        mm = self.__mul__(x)
-        match mm:
-            case torch.Tensor():
-                return mm
-        raise NotImplementedError
+    def __matmul__(self, x: torch.Tensor) -> Union[torch.Tensor, "LinearOperator"]:
+        return self * x
 
     def __rmul__(self, x: torch.Tensor | int | float) -> "LinearOperator":
         """
@@ -124,6 +118,7 @@ class LinearOperator(ABC):
 
         Several other dunder methods are overloaded to perform the same task.
         """
+        breakpoint()
         match x:
             case torch.Tensor():
                 if x.ndim == 0:
@@ -133,12 +128,8 @@ class LinearOperator(ABC):
             case int() | float():
                 return _ScaledLinearOperator(self, x)
 
-    def __rmatmul__(self, x: torch.Tensor) -> torch.Tensor:
-        rmm = self.__rmul__(x)
-        match rmm:
-            case torch.Tensor():
-                return rmm
-        raise NotImplementedError
+    def __rmatmul__(self, x: torch.Tensor) -> Union[torch.Tensor, "LinearOperator"]:
+        return x * self
 
     def __pow__(self, p: Union[int, torch.Tensor]):
         """
@@ -257,10 +248,9 @@ class _SumLinearOperator(LinearOperator):
     def __init__(self, A: LinearOperator, B: LinearOperator):
         if A.shape != B.shape:
             raise ValueError("A and B must have the same shape")
-        if A.dtype != B.dtype:
-            raise ValueError("A and B must have the same dtype")
 
-        super(_SumLinearOperator, self).__init__(A.dtype, A.shape)
+        sum_dtype = torchemlp.utils.merge_torch_types(A.dtype, B.dtype)
+        super(_SumLinearOperator, self).__init__(sum_dtype, A.shape)
 
         self.A = A
         self.B = B
@@ -281,6 +271,8 @@ class _SumLinearOperator(LinearOperator):
     def adjoint(self) -> LinearOperator:
         return self.A.H + self.B.H
 
+    # TODO pull invT into a separate class and do multiple inhereitance
+    # to have type checked guarantees
     def invT(self) -> LinearOperator:
         if hasattr(self.A, "invT") and hasattr(self.B, "invT"):
             return self.A.invT() + self.B.invT()
@@ -295,10 +287,12 @@ class _ProductLinearOperator(LinearOperator):
     def __init__(self, A: LinearOperator, B: LinearOperator):
         if A.shape[1] != B.shape[0]:
             raise ValueError("A and B must have composable shapes")
-        if A.dtype != B.dtype:
-            raise ValueError("A and B must have the same dtype")
 
-        super(_ProductLinearOperator, self).__init__(A.dtype, (A.shape[0], B.shape[1]))
+        prod_dtype = torchemlp.utils.merge_torch_types(A.dtype, B.dtype)
+        super(_ProductLinearOperator, self).__init__(
+            prod_dtype, (A.shape[0], B.shape[1])
+        )
+
         self.A = A
         self.B = B
         self.args = (A, B)
@@ -491,6 +485,9 @@ class IdentityOperator(LinearOperator):
         return x
 
     def adjoint(self) -> LinearOperator:
+        return self
+
+    def invT(self) -> LinearOperator:
         return self
 
 

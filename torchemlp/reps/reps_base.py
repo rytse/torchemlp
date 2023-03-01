@@ -124,7 +124,7 @@ class Rep(ABC):
         Get the equivariance constraint matrix.
         """
         if self.G is None:
-            raise NotImplementedError
+            return lazify(torch.zeros((1, self.size)))
 
         discrete_constraints = [
             lazify(self.rho(h)) - I(self.size) for h in self.G.discrete_generators
@@ -132,11 +132,7 @@ class Rep(ABC):
         continuous_constraints = [lazify(self.drho(A)) for A in self.G.lie_algebra]
         constraints = discrete_constraints + continuous_constraints
 
-        return (
-            LazyConcat(constraints)
-            if constraints
-            else lazify(torch.zeros((1, self.size)))
-        )
+        return LazyConcat(constraints)
 
     def equivariant_basis(self) -> LinearOperator:
         """
@@ -147,13 +143,13 @@ class Rep(ABC):
         canon_rep, perm = self.canonicalize()
         invperm = torch.argsort(perm)
 
-        if canon_rep not in self.__class__.solcache:
+        if canon_rep not in self.solcache:
             C = canon_rep.constraint_matrix()
             if C.shape[0] * C.shape[1] < 3e7:  # SVD
                 result = orthogonal_complement(C.dense)
             else:  # too big for SVD, use iterative krylov solver
                 result = krylov_constraint_solve(C)
-            self.__class__.solcache[canon_rep] = lazify(result)
+            self.solcache[canon_rep] = lazify(result)
 
         if all(invperm == perm):
             return self.__class__.solcache[canon_rep]
@@ -163,7 +159,7 @@ class Rep(ABC):
         """
         Computes Q @ Q.H lazily to project onto the equivariant basis.
         """
-        Q_lazy = self.equivariant_basis
+        Q_lazy = self.equivariant_basis()
         return Q_lazy @ Q_lazy.H
 
     def __add__(self, other: Union["Rep", int, torch.Tensor]) -> "Rep":
@@ -179,12 +175,12 @@ class Rep(ABC):
             case int():
                 if other == 0:
                     return self
-                return self + other * Scalar
+                return self + other * ScalarRep(self.G)
             case torch.Tensor():
                 if other.ndim == 0:
                     if other == 0:
                         return self
-                    return self + int(other) * Scalar
+                    return self + int(other) * ScalarRep(self.G)
                 raise ValueError("Can only add reps, ints, and singleton int tensors")
 
     def __radd__(self, other: Union["Rep", int, torch.Tensor]) -> "Rep":
@@ -200,12 +196,12 @@ class Rep(ABC):
             case int():
                 if other == 0:
                     return self
-                return other * Scalar + self
+                return other * ScalarRep(self.G) + self
             case torch.Tensor():
                 if other.ndim == 0:
                     if other == 0:
                         return self
-                    return int(other) * Scalar + self
+                    return int(other) * ScalarRep(self.G) + self
                 raise ValueError("Can only add reps, ints, and singleton int tensors")
 
     def __mul__(self, x: Union["Rep", int]) -> "Rep":
@@ -214,7 +210,15 @@ class Rep(ABC):
         If x is an int, return the repeated tensor sum of self, x times
         """
 
+        # If we can distribute the tensor product, do so
+        # TODO see if there's a more OOP-y / pythonic way to do this
+        if isinstance(self, SumRep) and isinstance(x, Rep) or isinstance(x, SumRep):
+            return distribute_product([self, x])
+
         match x:
+            case ScalarRep():
+                return x.__mul__(self)
+
             case Rep():
                 if self.G is not None and x.G is not None:
                     return ProductRep([self, x])
@@ -226,7 +230,7 @@ class Rep(ABC):
                 if x == 1:
                     return self
                 elif x == 0:
-                    return ZeroRep()
+                    return ScalarRep(self.G)
                 elif self.G is not None:
                     return SumRep([self for _ in range(x)])
                 return DeferredSumRep([self for _ in range(x)])
@@ -237,7 +241,15 @@ class Rep(ABC):
         If x is an int, return the repeated tensor sum of self, x times
         """
 
+        # If we can distribute the tensor product, do so
+        # TODO see if there's a more OOP-y / pythonic way to do this
+        if isinstance(self, SumRep) and isinstance(x, Rep) or isinstance(x, SumRep):
+            return distribute_product([x, self])
+
         match x:
+            case ScalarRep():
+                return x.__rmul__(self)
+
             case Rep():
                 if self.G is not None and x.G is not None:
                     return ProductRep([x, self])
@@ -249,7 +261,7 @@ class Rep(ABC):
                 if x == 1:
                     return self
                 elif x == 0:
-                    return ZeroRep()
+                    return ScalarRep(self.G)
                 elif self.G is not None:
                     return SumRep([self for _ in range(x)])
                 return DeferredSumRep([self for _ in range(x)])
@@ -260,7 +272,9 @@ class Rep(ABC):
         """
         assert other >= 0, "Power only supported for non-negative integers"
         prodlist = [self for _ in range(other)]
-        return reduce(lambda a, b: a * b, prodlist)
+        if len(prodlist) > 0:
+            return reduce(lambda a, b: a * b, prodlist)
+        return ScalarRep(self.G)
 
     def __rshift__(self, other: int) -> "Rep":
         """
@@ -304,37 +318,36 @@ class Rep(ABC):
 
     @property
     def T(self) -> "Rep":
-        breakpoint()
         if self.G is not None and self.G.is_orthogonal:
             return self
-        raise NotImplementedError
+        return Dual(self)
 
 
-class ZeroRep(Rep):
-    """
-    Represents the zero vector.
-    """
+# class ZeroRep(Rep):
+# """
+# Represents the zero vector.
+# """
 
-    def rho(self, g: GroupElem) -> ReprElem:
-        return torch.zeros(g.shape, dtype=g.dtype)
+# def rho(self, g: GroupElem) -> ReprElem:
+# return torch.zeros(g.shape, dtype=g.dtype)
 
-    def drho(self, A: LieAlgebraElem) -> ReprElem:
-        return torch.zeros(A.shape, dtype=A.dtype)
+# def drho(self, A: LieAlgebraElem) -> ReprElem:
+# return torch.zeros(A.shape, dtype=A.dtype)
 
-    def __call__(self, G: Group) -> Rep:
-        # return self
-        # TODO CHECK THAT ITS OK TO RETURN A NEW REPRESENTATION, NOT A COPY
-        return ZeroRep()
+# def __call__(self, G: Group) -> Rep:
+# # return self
+# # TODO CHECK THAT ITS OK TO RETURN A NEW REPRESENTATION, NOT A COPY
+# return ZeroRep()
 
-    def __repr__(self) -> str:
-        return "0V"
+# def __repr__(self) -> str:
+# return "0V"
 
-    @property
-    def size(self) -> int:
-        return 0
+# @property
+# def size(self) -> int:
+# return 0
 
-    def constraint_matrix(self) -> LinearOperator:
-        return ZeroOperator()
+# def constraint_matrix(self) -> LinearOperator:
+# return ZeroOperator()
 
 
 class OpRep(Rep, ABC):
@@ -373,6 +386,8 @@ class OpRep(Rep, ABC):
                     the tensor product in the tensor product.
             extra_perm: tensor to specify a non-canonical ordering
         """
+        super().__init__(None)
+
         match reps:
             case dict():
                 self.counters = reps
@@ -405,7 +420,7 @@ class OpRep(Rep, ABC):
                     match rep:
                         case self.__class__():
                             in_counters.append(rep.counters)
-                        case Rep():
+                        case _:
                             in_counters.append({rep: 1})
 
                 self.counters: dict[Rep, int] = dict()
@@ -424,6 +439,13 @@ class OpRep(Rep, ABC):
                         )
 
         self.invperm = torch.argsort(self.perm)
+        self.Gs = [rep.G for rep in self.counters.keys()]
+        self.G = self.Gs[0] if len(set(self.Gs)) == 1 else None
+
+        if all(self.Gs[0] == self.Gs[i] for i in range(len(self.Gs))):
+            self.G = self.Gs[0]
+        else:
+            self.G = None
 
         self.canonical = torch.all(self.perm == self.invperm)
         self.is_permutation = all(rep.is_permutation for rep in self.counters.keys())
@@ -463,7 +485,6 @@ class OpRep(Rep, ABC):
         """
         Swap to adjoint representation without reordering elements.
         """
-        breakpoint()
         return self.__class__(
             [rep.T for rep, c in self.counters.items() for _ in range(c)], self.perm
         )
@@ -618,12 +639,12 @@ class SumRep(OpRep):
         constraints across elements of the sum and lazifying them together.
         """
         Ps: dict[Rep, LinearOperator] = {
-            rep: rep.equivariant_projector() for rep in self.counters.keys()
+            rep: rep.equivariant_projector() for rep in self.counters
         }
         mults = self.counters.values()
 
         dtype = float
-        shape = (self.size, mults)
+        shape = (self.size, self.size)
 
         def lazy_P(P: torch.Tensor) -> torch.Tensor:
             return lazy_direct_matmat(P[self.perm], list(Ps.values()), list(mults))[
@@ -641,20 +662,6 @@ class SumRep(OpRep):
                 return lazy_P(M)
 
         return LazyP()
-
-    def __mul__(self, other: Rep) -> Rep:
-        """
-        Expand product of sums into sum of products for efficient tensor
-        product of direct sum.
-        """
-        return distribute_product([self, other])
-
-    def __rmul__(self, other: Rep) -> Rep:
-        """
-        Expand product of sums into sum of products for efficient tensor
-        product of direct sum.
-        """
-        return distribute_product([other, self])
 
     def __repr__(self) -> str:
         return "+".join(
@@ -682,16 +689,18 @@ def distribute_product(reps: list[Rep]) -> Rep:
                 sum_reps.append(rep)
             case Rep():
                 sum_reps.append(SumRep({rep: 1}))
+    sum_reps = tuple(sum_reps)
 
     # Compute axis-wise permutation to canonical rep
-    axis_sizes = []
-    for perm in perms:
-        match perm:
-            case torch.Tensor():
-                axis_sizes.append(len(perm))
-            case _:
-                raise ValueError("Permutation must be a torch.Tensor")
-    order = torch.arange(product(axis_sizes)).reshape(tuple(axis_sizes))
+    axis_sizes = tuple([len(perm) for perm in perms])
+    # for perm in perms:
+    # match perm:
+    # case torch.Tensor():
+    # axis_sizes.append(len(perm))
+    # case _:
+    # raise ValueError("Permutation must be a torch.Tensor")
+
+    order = torch.arange(product(axis_sizes)).reshape(axis_sizes)
     for i, perm in enumerate(perms):
         order = torch.swapaxes(torch.swapaxes(order, 0, i)[perm, ...], 0, i)
     order = order.reshape(-1)
@@ -710,27 +719,28 @@ def distribute_product(reps: list[Rep]) -> Rep:
     ordered_reps = []
     each_perm = []
     i = 0
-    for prod in itertools.product(*[rep.reps.items() for rep in sum_reps]):
+    for prod in itertools.product(*[rep.counters.items() for rep in sum_reps]):
         rs, cs = zip(*prod)
-        prod_rep, canonicalizing_perm = (product(cs) * product(rs)).canonicalize()
+        prod_rep = product(cs) * product(rs)
+        prod_rep, can_perm = prod_rep.canonicalize()
+
         ordered_reps.append(prod_rep)
         shape = []
         for r, c in prod:
-            shape.extend([c * r.size])
+            shape.extend([c, r.size])
 
-        num = list(range(0, 2 * len(prod)))
+        num = list(range(2 * len(prod)))
         evens = num[::2]
         odds = num[1::2]
         axis_perm = evens + odds
         mul_perm = torch.permute(
-            torch.arange(len(canonicalizing_perm)).reshape(shape), axis_perm
+            torch.arange(len(can_perm)).reshape(shape), axis_perm
         ).reshape(-1)
 
-        each_perm.append(mul_perm[canonicalizing_perm] + i)
-        i += len(canonicalizing_perm)
+        each_perm.append(mul_perm[can_perm] + i)
+        i += len(can_perm)
 
-    each_perm = torch.tensor(each_perm)
-    total_perm = order[block_perm[each_perm]]
+    total_perm = order[block_perm[torch.cat(each_perm)]]
 
     return SumRep(ordered_reps, total_perm)
 
@@ -743,9 +753,10 @@ def rep_permutation(repsizes_all) -> torch.Tensor:
     size_cumsums = []
     for repsizes in repsizes_all:
         padded_sizes = torch.tensor([0] + [size for size in repsizes])
-        size_cumsums.append(torch.cumsum(torch.flatten(padded_sizes), 0))
+        # size_cumsums.append(torch.cumsum(torch.flatten(padded_sizes), 0))
+        size_cumsums.append(torch.cumsum(padded_sizes, 0))
     permutation = torch.zeros([cumsum[-1] for cumsum in size_cumsums], dtype=torch.int)
-    arange = torch.arange(len(repsizes_all))
+    arange = torch.arange(reduce(lambda x, y: x * y, permutation.size()))
     indices_iter = itertools.product(
         *[range(len(repsizes)) for repsizes in repsizes_all]
     )
@@ -758,7 +769,7 @@ def rep_permutation(repsizes_all) -> torch.Tensor:
                 for idx, cumsum in zip(indices, size_cumsums)
             ]
         )
-        slice_lengths = [sl.stop - sl.start for sl in slices]
+        slice_lengths = [int(sl.stop - sl.start) for sl in slices]
         chunk_size = product(slice_lengths)
         permutation[slices] += arange[i : i + chunk_size].reshape(*slice_lengths)
         i += chunk_size
@@ -789,10 +800,7 @@ class ProductRep(OpRep):
         extra_perm: Optional[torch.Tensor] = None,
     ):
         super().__init__(inreps, extra_perm)
-
-        Gs = tuple(set(rep.G for rep in self.counters.keys()))
-        assert len(Gs) == 1, "Multiple different groups in product rep"
-        self.G = Gs[0]
+        assert self.G is not None, "Can only take products of reps of the same group"
 
     @staticmethod
     def compute_canonical(
@@ -957,7 +965,7 @@ class DeferredOpRep(Rep, ABC):
 
     def __init__(self, reps: list[Rep]):
         self.G = None
-        self.to_op: list[Rep] = []
+        self.to_op = []
 
         for rep in reps:
             match rep:
@@ -965,6 +973,9 @@ class DeferredOpRep(Rep, ABC):
                     self.to_op.extend(rep.to_op)
                 case _:
                     self.to_op.append(rep)
+
+        # Ensure hashable
+        self.to_op = tuple(self.to_op)
 
     @abstractmethod
     def __call__(self, G: Optional[Group]) -> Rep:
@@ -1034,11 +1045,12 @@ class ScalarRep(Rep):
         self.is_permutation = True
 
     def __call__(self, G: Optional[Group]) -> Rep:
-        # self.G = G
-        # return self
+        self.G = G
+        return self
         # TODO CHECK THAT ITS OK TO RETURN A NEW REPRESENTATION, NOT A COPY
-        return ScalarRep(G)
+        # return ScalarRep(G)
 
+    @property
     def size(self) -> int:
         return 1
 
@@ -1054,7 +1066,6 @@ class ScalarRep(Rep):
     def constraint_matrix(self) -> LinearOperator:
         raise NotImplementedError
 
-    @property
     def equivariant_basis(self):
         return torch.ones((1, 1))
 
@@ -1071,6 +1082,14 @@ class ScalarRep(Rep):
             case int():
                 return super().__mul__(other)
 
+    def __rmul__(self, other: Rep | int) -> Rep:
+        match other:
+            case Rep():
+                return other
+            case int():
+                return super().__rmul__(other)
+
+    @property
     def T(self) -> Rep:
         return self
 
@@ -1108,6 +1127,7 @@ class Base(Rep):
     def size(self) -> int:
         if self.G is None:
             return 0
+        # return self.rho(self.G.sample()).shape[-1]
         return self.G.d
 
     @property

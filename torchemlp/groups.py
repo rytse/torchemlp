@@ -86,7 +86,7 @@ class Group(ABC):
                 self.is_orthogonal = True
         elif len(self.discrete_generators) > 0:
             h_dense = torch.stack([h.dense for h in self.discrete_generators])
-            if rel_err(-torch.transpose(h_dense, 2, 1), h_dense) < epsilon:
+            if rel_err(-torch.transpose(-h_dense, 2, 1), h_dense) < epsilon:
                 self.is_orthogonal = True
 
         # Check permutation flag
@@ -445,7 +445,7 @@ class S(Group):
     def __init__(self, n: int):
         perms = torch.arange(n)[None].int() + torch.zeros((n - 1, 1)).int()
         perms[:, 0] = torch.arange(1, n)
-        perms[torch.arange(n - 1), -torch.arange(1, n)[None]] = 0
+        perms[torch.arange(n - 1), torch.arange(1, n)[None]] = 0
         self.discrete_generators = [LazyPerm(perm) for perm in perms]
         super().__init__(n)
 

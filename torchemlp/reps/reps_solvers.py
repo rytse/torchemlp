@@ -59,7 +59,10 @@ def krylov_constraint_solve_upto_r(
     """
 
     # Define optimization problem
-    W = torch.randn(C.shape[-1], r, dtype=C.dtype) / torch.sqrt(C.shape[-1])
+    W = torch.randn(C.shape[-1], r, dtype=C.dtype) / torch.sqrt(
+        torch.tensor(C.shape[-1])
+    )
+    W.requires_grad = True
 
     def loss_fn(W):
         return torch.sum(torch.abs(C @ W) ** 2) / 2.0
@@ -69,7 +72,7 @@ def krylov_constraint_solve_upto_r(
     # Progress var
     pbar = tqdm(
         total=100,
-        desc=f"Krylov SOlving for Equivariant Subspace r<={r}",
+        desc=f"Krylov Solving for Equivariant Subspace r<={r}",
         bar_format="{l_bar}{bar}| {n:.3g}/{total_fmt} [{elapsed}<{remaining}, {rate_fmt}{postfix}]",
     )
     lstart = loss_fn(W)
@@ -106,8 +109,8 @@ def krylov_constraint_solve_upto_r(
                 )
 
             return krylov_constraint_solve_upto_r(C, r, tol, n_iters, lr / 3.0)
-        else:
-            raise Exception("Failed to converge.")
+    else:
+        raise Exception("Failed to converge.")
 
     # Orthogonalize the solution
     U, S, _ = torch.linalg.svd(W, full_matrices=False)
@@ -122,5 +125,59 @@ def krylov_constraint_solve_upto_r(
     scutoff = S[rank] if r > rank else 0
     if not (rank == 0 or scutoff < S[rank - 1] / 100):
         print("WARNING: Singular value gap too small")
+
+    return Q
+
+
+def sparsify_basis(Q: torch.Tensor, lr: float = 1e-2) -> torch.Tensor:
+    """
+    Attempt to sparsify a given basis by applying an orthogonal transformation
+
+        W, Q' = QW
+
+    where Q' is only 1s, 0s, and -1s.
+
+    This method doesn't have the ssame convergence guarantees as the krylov
+    solver, and will even fail silently. Use this for visualization, not for
+    learning algorithms.
+    """
+
+    # Define optimization problem
+    W = torch.rand(Q.shape[-1], Q.shape[-1])
+    W, _ = torch.linalg.qr(W)
+    W.requires_grad = True
+
+    def loss_fn(W):
+        return (
+            torch.mean(torch.abs(Q @ W.T))
+            + 0.1 * torch.mean(torch.abs(W.T @ W - torch.eye(W.shape[0])))
+            + 0.01 * torch.linalg.slogdet(W)[1] ** 2
+        )
+
+    optimizer = torch.optim.SGD([W], lr=lr)
+
+    # Perform optimization
+    for i in tqdm(range(3000), desc="Sparsifying basis"):
+        optimizer.zero_grad()
+        loss = loss_fn(W)
+        loss.backward()
+        optimizer.step()
+
+        if loss > 1e2 and i > 100:
+            print(
+                f"Basis sparsification diverged, trying lower learning rate {lr/3:.2e}"
+            )
+            return sparsify_basis(Q, lr=lr / 3)
+
+    # Decide what's a 0, +1, and -1
+    Q = Q @ W.T
+    Q[torch.abs(Q) < 1e-2] = 0
+    Q[torch.abs(Q) > 1e-2] = torch.sgn(Q)[torch.abs(Q) > 1e-2]
+
+    # Check convergence
+    A = Q @ (1.0 + torch.arange(Q.shape[-1]))
+    n_pivots = len(torch.unique(torch.abs(A)))
+    if n_pivots != Q.shape[-1] and n_pivots != Q.shape[-1] + 1:
+        print(f"Basis elems did not seperate, foun only {n_pivots}/{Q.shape[-1] + 1}")
 
     return Q
