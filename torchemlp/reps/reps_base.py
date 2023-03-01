@@ -6,11 +6,11 @@ import itertools
 
 import torch
 
-from torchemlp.utils import (
-    GroupElem,
-    LieAlgebraElem,
-    ReprElem,
-)
+# from torchemlp.utils import (
+# GroupElem,
+# LieAlgebraElem,
+# ReprElem,
+# )
 
 from torchemlp.groups import Group
 from torchemlp.ops import (
@@ -30,6 +30,21 @@ from torchemlp.ops import densify, lazify
 
 from .reps_utils import dictify_rep
 from .reps_solvers import orthogonal_complement, krylov_constraint_solve
+
+# Elements of a group embedded as a tensor or linear operator.
+# Has the same python type as LieAlgebraElem(s) and ReprElem(s), but we define
+# them differently so that our methods' type signatures are more helpful.
+GroupElem = Union[torch.Tensor, LinearOperator]
+
+# Elements of a group's Lie algebra embedded as a tensor or linear operator.
+# Has the same python type as GroupElem(s) and ReprElem(s), but we define them
+# differently so that our methods' type signatures are more helpful.
+LieAlgebraElem = Union[torch.Tensor, LinearOperator]
+
+# Representation of a group element as a tensor or linear operator.
+# Has the same python type as GroupElem(s) and LieAlgebraElem(s), but we define
+# them differently so that our methods' type signatures are more helpful.
+ReprElem = Union[torch.Tensor, LinearOperator]
 
 
 class Rep(ABC):
@@ -1206,3 +1221,13 @@ class Dual(Base):
 # The base instances of the Vector and Scalar representations
 V = Vector = Base()
 Scalar = ScalarRep()
+
+
+def T(p: int, q: int = 0, G: Optional[Group] = None) -> Rep:
+    """
+    Convenience function for creating rank (p, q) tensors
+    """
+    match G:
+        case Group():
+            return (V**p * V.T**q)(G)
+    return V**p * V.T**q

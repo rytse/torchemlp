@@ -2,7 +2,6 @@ from typing import Union, Callable, Any
 from abc import ABC, abstractmethod
 
 import torch
-import functorch
 
 import torchemlp.ops
 import torchemlp.utils

@@ -1,25 +1,28 @@
-from typing import Union, List
+import numpy as np
+import matplotlib.pyplot as plt
+
+from sklearn.cluster import KMeans
 
 import torch
-
-from torchemlp.ops import LinearOperator
-
-# Elements of a group embedded as a tensor or linear operator.
-# Has the same python type as LieAlgebraElem(s) and ReprElem(s), but we define
-# them differently so that our methods' type signatures are more helpful.
-GroupElem = Union[torch.Tensor, LinearOperator]
-GroupElems = Union[torch.Tensor, List[LinearOperator]]
-
-# Elements of a group's Lie algebra embedded as a tensor or linear operator.
-# Has the same python type as GroupElem(s) and ReprElem(s), but we define them
-# differently so that our methods' type signatures are more helpful.
-LieAlgebraElem = Union[torch.Tensor, LinearOperator]
-
-# Representation of a group element as a tensor or linear operator.
-# Has the same python type as GroupElem(s) and LieAlgebraElem(s), but we define
-# them differently so that our methods' type signatures are more helpful.
-ReprElem = Union[torch.Tensor, LinearOperator]
 
 
 def merge_torch_types(dtype1, dtype2):
     return (torch.ones(1, dtype=dtype1) * torch.ones(1, dtype=dtype2)).dtype
+
+
+def vis_basis(basis, shape, cluster=True):
+    Q = basis @ np.eye(basis.shape[-1])  # convert to a dense matrix if necessary
+    v = np.random.randn(Q.shape[0])  # sample random vector
+    v = Q @ (Q.T @ v)  # project onto equivariant subspace
+    if cluster:  # cluster nearby values for better color separation in plot
+        v = KMeans(n_clusters=Q.shape[-1]).fit(v.reshape(-1, 1)).labels_
+    if v is not None:
+        plt.imshow(v.reshape(shape))
+        plt.axis("off")
+    else:
+        print("Q @ (Q.T @ v) failed")
+
+
+def vis(repin, repout, cluster=True):
+    Q = (repin >> repout).equivariant_basis().dense  # compute the equivariant basis
+    vis_basis(Q, (repout.size, repin.size), cluster)  # visualize it

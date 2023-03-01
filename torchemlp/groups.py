@@ -3,7 +3,6 @@ from abc import ABC
 import random
 
 import torch
-import functorch
 
 from torchemlp.ops import (
     LinearOperator,
