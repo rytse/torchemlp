@@ -291,7 +291,7 @@ class Rep(ABC):
             return reduce(lambda a, b: a * b, prodlist)
         return ScalarRep(self.G)
 
-    def __rshift__(self, other: int) -> "Rep":
+    def __rshift__(self, other: "Rep") -> "Rep":
         """
         Compute the adjoint map from self->other, overloading the >> operator.
         """
@@ -677,6 +677,16 @@ class SumRep(OpRep):
                 return lazy_P(M)
 
         return LazyP()
+
+    def as_dict(self, v):
+        out_dict = {}
+        i = 0
+        for rep, c in self.counters.items():
+            chunk = c * rep.size
+            out_dict[rep] = v[..., self.perm[i : i + chunk]].reshape(
+                v.shape[:-1] + (c, rep.size)
+            )
+        return out_dict
 
     def __repr__(self) -> str:
         return "+".join(
@@ -1231,3 +1241,71 @@ def T(p: int, q: int = 0, G: Optional[Group] = None) -> Rep:
         case Group():
             return (V**p * V.T**q)(G)
     return V**p * V.T**q
+
+
+def bilinear_weights(inrep: SumRep, outrep: Rep):
+    """
+    Compute the bilinear weights for a given input and output representation.
+    """
+    # TODO this has a lot of work to be done to make it more efficient.
+    # TODO refactor to "KLinear"
+    # TODO replace with LazyDirectSum
+    W_rep, W_perm = (inrep >> outrep).canonicalize()
+    W_invperm = torch.argsort(W_perm)
+    W_shape = (outrep.size, inrep.size)
+
+    # Make sure W is an OpRep that we can direct sum over
+    match W_rep:
+        case SumRep():
+            pass
+        case _:
+            raise ValueError(
+                "Input rep map is not a direct sum, can't compute bilinear weights"
+            )
+
+    W_mults = W_rep.counters
+    x_mults = inrep.counters
+    x_mults = {rep: c for rep, c in x_mults.items() if not isinstance(rep, ScalarRep)}
+
+    nelems = lambda nx, rep: min(nx, rep.size)
+    active_dims = sum(
+        [W_mults.get(rep, 0) * nelems(n, rep) for rep, n in x_mults.items()]
+    )
+
+    inrep_dict = inrep.as_dict(torch.arange(inrep.size))
+    reduced_indices_dict = {}
+    for rep, ids in inrep_dict.items():
+        rand_indices = torch.randint(
+            low=0, high=len(ids), size=(nelems(len(ids), rep),)
+        )
+        reduced_indices_dict[rep] = ids[rand_indices].reshape(-1)
+
+    # TODO jit
+    def lazy_proj(params, x):
+        bshape = x.shape[:-1]
+        x = x.reshape(-1, x.shape[-1])
+        bs = x.shape[0]
+
+        i = 0
+        Ws = []
+        for rep, W_mult in W_mults.items():
+            if rep not in x_mults:
+                Ws.append(torch.zeros((bs, W_mult * rep.size)))
+                continue
+
+            x_mult = x_mults[rep]
+            n = nelems(x_mult, rep)
+            i_end = i + W_mult * n
+            bids = reduced_indices_dict[rep]
+
+            bilinear_params = params[i:i_end].reshape(W_mult, n)
+            i = i_end
+            bilinear_elems = bilinear_params @ x[..., bids].T.reshape(n, rep.size * bs)
+            bilinear_elems = bilinear_elems.reshape(W_mult * rep.size, bs).T
+
+            Ws.append(bilinear_elems)
+
+        Ws = torch.cat(Ws, dim=-1)
+        return Ws[..., W_invperm].reshape(*bshape, *W_shape)
+
+    return active_dims, lazy_proj
