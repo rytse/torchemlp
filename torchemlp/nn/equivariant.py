@@ -43,14 +43,12 @@ class EquivariantBiLinear(nn.Module):
         super(EquivariantBiLinear, self).__init__()
         self.W_dim, self.W_proj = bilinear_weights(repin, repout)  # TODO jit
         self.W = nn.Parameter(
-            torch.normal(
-                torch.zeros((self.W_dim, self.W_dim)), torch.ones((self.W_dim,))
-            )
+            torch.normal(torch.zeros((self.W_dim,)), torch.ones((self.W_dim,)))
         )
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        W_projected = self.W_proj(self.w, x)
-        return 0.1 * (W_projected @ x[..., None])[..., 0]
+        W_proj = self.W_proj(self.W, x)
+        return 0.1 * (W_proj @ x[..., None])[..., 0]
 
 
 class GatedNonlinearity(nn.Module):
@@ -133,7 +131,7 @@ class EMLPBlock(nn.Module):
             raise ValueError("gated(repin) and gated(repout) must be SumReps")
 
         self.linear = EquivariantLinear(repin, gated_out)
-        self.bilinear = EquivariantBiLinear(gated_in, gated_out)
+        self.bilinear = EquivariantBiLinear(gated_out, gated_out)
         self.nonlinear = GatedNonlinearity(repout)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
@@ -177,15 +175,12 @@ class EMLP(nn.Module):
 
         reps = [self.repin] + middle_layers
 
-        # TODO Fix
-        # Each EMLPBlock consumes a ton of memory, to the point where running
-        # this usually causes a crash. Not sure what's wrong, but I'd guess
-        # some operator is being needlessly converted to its dense
-        # in constructing representation bilinear's self.W_proj.
-        block_layers = [EMLPBlock(rin, rout) for rin, rout in zip(reps, reps[1:])]
-        out_layer = EquivariantLinear(reps[-1], self.repout)
+        layers = []
+        for rin, rout in zip(reps, reps[1:]):
+            layers.append(EMLPBlock(rin, rout))
+        layers.append(EquivariantLinear(reps[-1], self.repout))
 
-        self.network = nn.Sequential(*block_layers, out_layer)
+        self.network = nn.Sequential(*layers)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         return self.network(x)

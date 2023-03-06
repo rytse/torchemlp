@@ -117,7 +117,6 @@ class LinearOperator(ABC):
 
         Several other dunder methods are overloaded to perform the same task.
         """
-        breakpoint()
         match x:
             case torch.Tensor():
                 if x.ndim == 0:

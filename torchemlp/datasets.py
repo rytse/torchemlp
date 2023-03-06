@@ -33,16 +33,16 @@ class GroupAugmentation(nn.Module):
 
 
 class Inertia(object):
-    def __init__(self, N=1024, k=5):
+    def __init__(self, N=1024, k=5, device=None):
         self.dim = (1 + 3) * k
 
-        self.X = torch.randn(N, self.dim)
+        self.X = torch.randn(N, self.dim, device=device)
 
         self.X[:, :k] = torch.log(1 + torch.exp(self.X[:, :k]))  # masses
         mi = self.X[:, :k]
         ri = self.X[:, k:].reshape(-1, k, 3)
 
-        I = torch.eye(3)
+        I = torch.eye(3, device=device)
         r2 = (ri**2).sum(-1)[..., None, None]
         inertia = (
             mi[:, :, None, None] * (r2 * I - ri[..., None] * ri[..., None, :])
@@ -55,17 +55,19 @@ class Inertia(object):
 
         Xmean = self.X.mean(0)
         Xmean[k:] = 0.0
-        Xstd = torch.zeros_like(Xmean)
+        Xstd = torch.zeros_like(Xmean, device=device)
         Xstd[:k] = torch.abs(self.X[:, :k]).mean(0)
         Xstd[k:] = (
             torch.abs(
                 self.X[:, k:].reshape(N, k, 3).mean((0, 2))[:, None]
-                + torch.zeros((k, 3))
+                + torch.zeros((k, 3), device=device)
             )
         ).reshape(k * 3)
 
         Ymean = 0 * self.Y.mean(0)
-        Ystd = torch.abs(self.Y - Ymean).mean((0, 1)) + torch.zeros_like(Ymean)
+        Ystd = torch.abs(self.Y - Ymean).mean((0, 1)) + torch.zeros_like(
+            Ymean, device=device
+        )
 
         self.stats = [0.0, 1.0, 0.0, 1.0]
 

@@ -1,5 +1,5 @@
 from abc import ABC, abstractmethod
-from typing import Optional, Dict, Tuple, Union, Generator
+from typing import Optional, Generator, Union
 from functools import lru_cache, reduce
 from collections import defaultdict
 import itertools
@@ -34,17 +34,17 @@ from .reps_solvers import orthogonal_complement, krylov_constraint_solve
 # Elements of a group embedded as a tensor or linear operator.
 # Has the same python type as LieAlgebraElem(s) and ReprElem(s), but we define
 # them differently so that our methods' type signatures are more helpful.
-GroupElem = Union[torch.Tensor, LinearOperator]
+GroupElem = torch.Tensor | LinearOperator
 
 # Elements of a group's Lie algebra embedded as a tensor or linear operator.
 # Has the same python type as GroupElem(s) and ReprElem(s), but we define them
 # differently so that our methods' type signatures are more helpful.
-LieAlgebraElem = Union[torch.Tensor, LinearOperator]
+LieAlgebraElem = torch.Tensor | LinearOperator
 
 # Representation of a group element as a tensor or linear operator.
 # Has the same python type as GroupElem(s) and LieAlgebraElem(s), but we define
 # them differently so that our methods' type signatures are more helpful.
-ReprElem = Union[torch.Tensor, LinearOperator]
+ReprElem = torch.Tensor | LinearOperator
 
 
 class Rep(ABC):
@@ -57,7 +57,7 @@ class Rep(ABC):
     """
 
     # Cache of canonicalized reps of the Rep class (used by the EMLP solver)
-    solcache: Dict["Rep", LinearOperator] = dict()
+    solcache: dict["Rep", LinearOperator] = dict()
 
     is_permutation: bool = False
 
@@ -115,7 +115,7 @@ class Rep(ABC):
         """
         pass
 
-    def canonicalize(self) -> Tuple["Rep", torch.Tensor]:
+    def canonicalize(self) -> tuple["Rep", torch.Tensor]:
         """
         Return canonical form of representation. This enables you to reuse
         equivalent solutions in the EMLP solver. Should return the canonically
@@ -423,10 +423,12 @@ class OpRep(Rep, ABC):
 
             case list():
                 # Canonicalize each rep to be multiplied
-                canreps, perms = zip(*[rep.canonicalize() for rep in reps])
-
-                if not all(isinstance(perm, torch.Tensor) for perm in perms):
-                    raise ValueError("Permutation must be a torch.Tensor")
+                canreps: list["Rep"] = []
+                perms: list[torch.Tensor] = []
+                for rep in reps:
+                    cr, p = rep.canonicalize()
+                    canreps.append(cr)
+                    perms.append(p)
 
                 # Dict containing the set of unique Reps in the multiplication
                 # and the number of occurances of each unique Rep
@@ -440,7 +442,7 @@ class OpRep(Rep, ABC):
 
                 self.counters: dict[Rep, int] = dict()
                 self.counters, perm = self.__class__.compute_canonical(
-                    in_counters, perms
+                    in_counters, tuple(perms)
                 )
 
                 match extra_perm:
@@ -469,7 +471,7 @@ class OpRep(Rep, ABC):
     @abstractmethod
     def compute_canonical(
         reps: list[dict[Rep, int]], perm: tuple[torch.Tensor]
-    ) -> Tuple[dict[Rep, int], torch.Tensor]:
+    ) -> tuple[dict[Rep, int], torch.Tensor]:
         """
         Compute the canonical order of the reps in the list of reps to sum over.
 
@@ -662,9 +664,12 @@ class SumRep(OpRep):
         shape = (self.size, self.size)
 
         def lazy_P(P: torch.Tensor) -> torch.Tensor:
-            return lazy_direct_matmat(P[self.perm], list(Ps.values()), list(mults))[
+            P_flat = P.flatten()
+            P_permed = P_flat[self.perm]
+            ldmm = lazy_direct_matmat(P_permed, list(Ps.values()), list(mults))[
                 self.invperm
             ]
+            return ldmm.reshape(P.shape)
 
         class LazyP(LinearOperator):
             def __init__(self):
@@ -705,7 +710,12 @@ def distribute_product(reps: list[Rep]) -> Rep:
     """
     Expands product of sums into sums of products,(ρ₁⊕ρ₂)⊗ρ₃ = (ρ₁⊗ρ₃)⊕(ρ₂⊗ρ₃).
     """
-    can_reps, perms = zip(*[repsum.canonicalize() for repsum in reps])
+    can_reps = []
+    perms = []
+    for repsum in reps:
+        cr, p = repsum.canonicalize()
+        can_reps.append(cr)
+        perms.append(p)
 
     sum_reps = []
     for rep in can_reps:
@@ -1134,14 +1144,14 @@ class Base(Rep):
         # return self.__class__(G)
         return Base(G)
 
-    def rho(self, g: GroupElem | Dict[Group, torch.Tensor]) -> ReprElem:
+    def rho(self, g: GroupElem | dict[Group, torch.Tensor]) -> ReprElem:
         if isinstance(g, GroupElem):
             return g
         if self.G is not None and isinstance(g, dict) and self.G in g:
             return g[self.G]
         raise ValueError("M must be a dictionary or a group element")
 
-    def drho(self, A: LieAlgebraElem | Dict[Group, torch.Tensor]) -> ReprElem:
+    def drho(self, A: LieAlgebraElem | dict[Group, torch.Tensor]) -> ReprElem:
         if isinstance(A, LieAlgebraElem):
             return A
         if self.G is not None and isinstance(A, dict) and self.G in A:
@@ -1300,6 +1310,7 @@ def bilinear_weights(inrep: SumRep, outrep: Rep):
 
             bilinear_params = params[i:i_end].reshape(W_mult, n)
             i = i_end
+
             bilinear_elems = bilinear_params @ x[..., bids].T.reshape(n, rep.size * bs)
             bilinear_elems = bilinear_elems.reshape(W_mult * rep.size, bs).T
 

@@ -2,6 +2,10 @@ from typing import Callable
 
 import torch
 import torch.nn as nn
+import torch.optim as optim
+import torch.nn.functional as F
+
+import pytorch_lightning as pl
 
 
 class MLP(nn.Module):
@@ -72,3 +76,33 @@ class Standardize(nn.Module):
         y = self.model(normalized_in)
         unnormalized_out = self.stdout * y + self.muout
         return unnormalized_out
+
+
+class RegressionLightning(pl.LightningModule):
+    def __init__(self, model):
+        super().__init__()
+        self.model = model
+
+    def training_step(self, batch, batch_idx):
+        x, y = batch
+        y_pred = self.model(x)
+        loss = F.mse_loss(y_pred, y)
+        self.log("train_loss", loss)
+
+        return loss
+
+    def test_step(self, batch, batch_idx):
+        x, y = batch
+        y_pred = self.model(x)
+        loss = F.mse_loss(y_pred, y)
+        self.log("test_loss", loss.item())
+
+    def validation_step(self, batch, batch_idx):
+        x, y = batch
+        y_pred = self.model(x)
+        loss = F.mse_loss(y_pred, y)
+        self.log("val_loss", loss)
+
+    def configure_optimizers(self):
+        optimizer = optim.Adam(self.parameters(), lr=3e-3, weight_decay=1e-4)
+        return optimizer

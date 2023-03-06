@@ -41,17 +41,17 @@ def lazy_direct_matmat(
 
     i = 0
     y = []
-    for M, multiplicity in zip(Ms, mults):
-        i_end = i + multiplicity * M.shape[-1]
+    for M, mult in zip(Ms, mults):
+        i_end = i + mult * M.shape[-1]
         v_slice = v[i:i_end]
 
         if v_slice.ndim == 2:
             v_slice = v_slice.T
 
-        v_slice = v_slice.reshape(k * int(multiplicity), M.shape[-1]).T
+        v_slice = v_slice.reshape(k * int(mult), M.shape[-1]).T
         elems = M @ v_slice
 
-        y.append(elems.T.reshape(k, int(multiplicity) * M.shape[0]).T)
+        y.append(elems.T.reshape(k, int(mult) * M.shape[0]).T)
         i = i_end
 
     return torch.cat(y, dim=0)
