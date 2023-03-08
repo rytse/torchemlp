@@ -190,6 +190,8 @@ class Rep(ABC):
         """
 
         match other:
+            case ZeroRep():
+                return self
             case Rep():
                 if self.G is not None and other.G is not None:
                     return SumRep([self, other])
@@ -211,6 +213,8 @@ class Rep(ABC):
         """
 
         match other:
+            case ZeroRep():
+                return self
             case Rep():
                 if self.G is not None and other.G is not None:
                     return SumRep([other, self])
@@ -238,6 +242,8 @@ class Rep(ABC):
             return distribute_product([self, x])
 
         match x:
+            case ZeroRep():
+                return ZeroRep(self.G)
             case ScalarRep():
                 return x.__mul__(self)
 
@@ -252,7 +258,7 @@ class Rep(ABC):
                 if x == 1:
                     return self
                 elif x == 0:
-                    return ScalarRep(self.G)
+                    return ZeroRep(self.G)
                 elif self.G is not None:
                     return SumRep([self for _ in range(x)])
                 return DeferredSumRep([self for _ in range(x)])
@@ -269,6 +275,8 @@ class Rep(ABC):
             return distribute_product([x, self])
 
         match x:
+            case ZeroRep():
+                return ZeroRep(self.G)
             case ScalarRep():
                 return x.__rmul__(self)
 
@@ -283,7 +291,7 @@ class Rep(ABC):
                 if x == 1:
                     return self
                 elif x == 0:
-                    return ScalarRep(self.G)
+                    return ZeroRep(self.G)
                 elif self.G is not None:
                     return SumRep([self for _ in range(x)])
                 return DeferredSumRep([self for _ in range(x)])
@@ -345,31 +353,44 @@ class Rep(ABC):
         return Dual(self, device=self.device)
 
 
-# class ZeroRep(Rep):
-# """
-# Represents the zero vector.
-# """
+class ZeroRep(Rep):
+    """
+    Represents the zero vector.
+    """
 
-# def rho(self, g: GroupElem) -> ReprElem:
-# return torch.zeros(g.shape, dtype=g.dtype)
+    def rho(self, g: GroupElem) -> ReprElem:
+        return torch.zeros(g.shape, dtype=g.dtype)
 
-# def drho(self, A: LieAlgebraElem) -> ReprElem:
-# return torch.zeros(A.shape, dtype=A.dtype)
+    def drho(self, A: LieAlgebraElem) -> ReprElem:
+        return torch.zeros(A.shape, dtype=A.dtype)
 
-# def __call__(self, G: Group) -> Rep:
-# # return self
-# # TODO CHECK THAT ITS OK TO RETURN A NEW REPRESENTATION, NOT A COPY
-# return ZeroRep()
+    def __call__(self, G: Group) -> Rep:
+        self.G = G
+        return self
 
-# def __repr__(self) -> str:
-# return "0V"
+    def __repr__(self) -> str:
+        return "0"
 
-# @property
-# def size(self) -> int:
-# return 0
+    def __add__(self, other: Rep):
+        return other
 
-# def constraint_matrix(self) -> LinearOperator:
-# return ZeroOperator()
+    def __radd__(self, other: Rep):
+        return other
+
+    def __mul__(self, other: Rep):
+        self.G = other.G
+        return self
+
+    def __rmul__(self, other: Rep):
+        self.G = other.G
+        return self
+
+    @property
+    def size(self) -> int:
+        return 0
+
+    def constraint_matrix(self) -> LinearOperator:
+        return ZeroOperator()
 
 
 class OpRep(Rep, ABC):
@@ -1137,6 +1158,8 @@ class ScalarRep(Rep):
 
     def __mul__(self, other: Rep | int) -> Rep:
         match other:
+            case ZeroRep():
+                return ZeroRep(self.G)
             case Rep():
                 return other
             case int():
@@ -1144,6 +1167,8 @@ class ScalarRep(Rep):
 
     def __rmul__(self, other: Rep | int) -> Rep:
         match other:
+            case ZeroRep():
+                return ZeroRep(self.G)
             case Rep():
                 return other
             case int():
@@ -1269,9 +1294,10 @@ class Dual(Base):
         return self.rep.size
 
 
-# The base instances of the Vector and Scalar representations
+# The base instances of the Vector, Scalar, and Zero representations
 V = Vector = Base()
 Scalar = ScalarRep()
+Zero = ZeroRep()
 
 
 def T(p: int, q: int = 0, G: Optional[Group] = None) -> Rep:
