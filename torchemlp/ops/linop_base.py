@@ -6,6 +6,8 @@ import torch
 import torchemlp.ops
 import torchemlp.utils
 
+from torchemlp.utils import DEFAULT_DEVICE
+
 
 class LinearOperator(ABC):
     def __init__(self, dtype, shape: tuple):
@@ -176,16 +178,15 @@ class LinearOperator(ABC):
             dt = f"dtype={self.dtype}"
         return f"<{M}x{N} {self.__class__.__name__} with {dt}>"
 
-    @property
-    def dense(self) -> torch.Tensor:
+    def dense(self, device: torch.device = DEFAULT_DEVICE) -> torch.Tensor:
         """
         Convert the lazy implementation of the linear operator to a matrix
         representing the operator in R^n.
         """
-        res = self @ torch.eye(self.shape[-1])
+        res = self @ torch.eye(self.shape[-1], device=device)
         match res:
             case LinearOperator():
-                return res.dense
+                return res.dense()
             case torch.Tensor():
                 return res
 
@@ -320,9 +321,8 @@ class _ProductLinearOperator(LinearOperator):
                     return torchemlp.ops.lazify(res)
         raise NotImplementedError
 
-    @property
     def dense(self) -> torch.Tensor:
-        return self.A.dense @ self.B.dense
+        return self.A.dense() @ self.B.dense()
 
 
 class _ScaledLinearOperator(LinearOperator):
@@ -335,12 +335,12 @@ class _ScaledLinearOperator(LinearOperator):
         self.A = A
 
         match c:
-            case float():
-                self.c = torch.tensor(c, dtype=A.dtype)
-            case int():
-                self.c = torch.tensor(c, dtype=A.dtype)
             case torch.Tensor():
+                if c.ndim != 0:
+                    raise ValueError("c must be a scalar")
                 self.c = c
+            case int() | float():
+                self.c = torch.tensor(c, dtype=A.dtype, device=DEFAULT_DEVICE)
 
         self.args = (A, c)
 
@@ -362,9 +362,8 @@ class _ScaledLinearOperator(LinearOperator):
     def invT(self) -> LinearOperator:
         return 1.0 / self.c * self.A.T
 
-    @property
     def dense(self) -> torch.Tensor:
-        return self.c * self.A.dense
+        return self.c * self.A.dense()
 
 
 class _PowerLinearOperator(LinearOperator):
@@ -379,15 +378,7 @@ class _PowerLinearOperator(LinearOperator):
             raise ValueError("p must be non-negative")
 
         super(_PowerLinearOperator, self).__init__(A.dtype, A.shape)
-
-        match p:
-            case int():
-                self.p = p
-            case torch.Tensor():
-                if p.ndim == 0:
-                    self.p = p
-                raise ValueError("p must be a scalar")
-
+        self.p = int(p)
         self.A = A
         self.args = (A, p)
 
@@ -449,16 +440,16 @@ class ZeroOperator(LinearOperator):
         super(ZeroOperator, self).__init__(None, (0,))
 
     def matvec(self, x: torch.Tensor) -> torch.Tensor:
-        return torch.zeros_like(x)
+        return torch.zeros_like(x, dtype=x.dtype, device=x.device)
 
     def matmat(self, x: torch.Tensor) -> torch.Tensor:
-        return torch.zeros_like(x)
+        return torch.zeros_like(x, dtype=x.dtype, device=x.device)
 
     def rmatvec(self, x: torch.Tensor) -> torch.Tensor:
-        return torch.zeros_like(x)
+        return torch.zeros_like(x, dtype=x.dtype, device=x.device)
 
     def rmatmat(self, x: torch.Tensor) -> torch.Tensor:
-        return torch.zeros_like(x)
+        return torch.zeros_like(x, dtype=x.dtype, device=x.device)
 
 
 class IdentityOperator(LinearOperator):
@@ -519,9 +510,8 @@ class Lazy(LinearOperator):
     def rmatmat(self, x: torch.Tensor) -> torch.Tensor:
         return self.A.H @ x
 
-    @property
-    def dense(self) -> torch.Tensor:
-        return self.A
+    def dense(self, device: torch.device = DEFAULT_DEVICE) -> torch.Tensor:
+        return self.A.to(device)
 
     def invT(self) -> LinearOperator:
         return Lazy(torch.linalg.inv(self.A).H)

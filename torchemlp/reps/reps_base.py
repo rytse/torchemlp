@@ -27,6 +27,7 @@ from torchemlp.ops import (
     LazyPerm,
 )
 from torchemlp.ops import densify, lazify
+from torchemlp.utils import DEFAULT_DEVICE
 
 from .reps_utils import dictify_rep
 from .reps_solvers import orthogonal_complement, krylov_constraint_solve
@@ -61,11 +62,17 @@ class Rep(ABC):
 
     is_permutation: bool = False
 
-    def __init__(self, G: Optional[Group] = None):
+    def __init__(
+        self, G: Optional[Group] = None, device: torch.device = DEFAULT_DEVICE
+    ):
         """
         Initialize a rep object with the group it acts on.
         """
         self.G = G
+        self.device = device
+
+        if self.G is not None:
+            assert self.G.device == self.device
 
     @abstractmethod
     def rho(self, g: GroupElem) -> ReprElem:
@@ -81,9 +88,9 @@ class Rep(ABC):
         if isinstance(A, torch.Tensor):
             A_dense = A
         elif isinstance(A, LinearOperator):
-            A_dense = A.dense
+            A_dense = A.dense()
 
-        I = torch.eye(A.shape[0], dtype=A.dtype)
+        I = torch.eye(A.shape[0], dtype=A.dtype, device=self.device)
         return LazyJVP(self.rho, I, A_dense)
 
     @abstractmethod
@@ -126,7 +133,7 @@ class Rep(ABC):
         representation is the canonical form. Overload this for non-canonical
         representations.
         """
-        return self, torch.arange(self.size)
+        return self, torch.arange(self.size, device=self.device)
 
     def rho_dense(self, g: GroupElem) -> torch.Tensor:
         return densify(self.rho(g))
@@ -139,7 +146,7 @@ class Rep(ABC):
         Get the equivariance constraint matrix.
         """
         if self.G is None:
-            return lazify(torch.zeros((1, self.size)))
+            return lazify(torch.zeros((1, self.size), device=self.device))
 
         discrete_constraints = [
             lazify(self.rho(h)) - I(self.size) for h in self.G.discrete_generators
@@ -161,14 +168,14 @@ class Rep(ABC):
         if canon_rep not in self.solcache:
             C = canon_rep.constraint_matrix()
             if C.shape[0] * C.shape[1] < 3e7:  # SVD
-                result = orthogonal_complement(C.dense)
+                result = orthogonal_complement(C.dense())
             else:  # too big for SVD, use iterative krylov solver
                 result = krylov_constraint_solve(C)
             self.solcache[canon_rep] = lazify(result)
 
         if all(invperm == perm):
             return self.__class__.solcache[canon_rep]
-        return lazify(self.__class__.solcache[canon_rep].dense[invperm])
+        return lazify(self.__class__.solcache[canon_rep].dense()[invperm])
 
     def equivariant_projector(self) -> LinearOperator:
         """
@@ -335,7 +342,7 @@ class Rep(ABC):
     def T(self) -> "Rep":
         if self.G is not None and self.G.is_orthogonal:
             return self
-        return Dual(self)
+        return Dual(self, device=self.device)
 
 
 # class ZeroRep(Rep):
@@ -388,6 +395,7 @@ class OpRep(Rep, ABC):
         self,
         reps: dict[Rep, int] | list[Rep],
         extra_perm: Optional[torch.Tensor] = None,
+        device: torch.device = DEFAULT_DEVICE,
     ):
         """
 
@@ -401,7 +409,7 @@ class OpRep(Rep, ABC):
                     the tensor product in the tensor product.
             extra_perm: tensor to specify a non-canonical ordering
         """
-        super().__init__(None)
+        super().__init__(None, device=device)
 
         match reps:
             case dict():
@@ -409,7 +417,7 @@ class OpRep(Rep, ABC):
 
                 match extra_perm:
                     case None:
-                        perm = torch.arange(self.size)
+                        perm = torch.arange(self.size, device=device)
                     case torch.Tensor():
                         perm = extra_perm
                     case _:  # TODO figure out why type checker doesn't understand "is None"
@@ -418,7 +426,7 @@ class OpRep(Rep, ABC):
                         )
 
                 self.counters, self.perm = self.__class__.compute_canonical(
-                    [reps], (perm,)
+                    [reps], (perm,), device=device
                 )
 
             case list():
@@ -442,7 +450,7 @@ class OpRep(Rep, ABC):
 
                 self.counters: dict[Rep, int] = dict()
                 self.counters, perm = self.__class__.compute_canonical(
-                    in_counters, tuple(perms)
+                    in_counters, tuple(perms), device=device
                 )
 
                 match extra_perm:
@@ -470,7 +478,7 @@ class OpRep(Rep, ABC):
     @staticmethod
     @abstractmethod
     def compute_canonical(
-        reps: list[dict[Rep, int]], perm: tuple[torch.Tensor]
+        reps: list[dict[Rep, int]], perm: tuple[torch.Tensor], device: torch.device
     ) -> tuple[dict[Rep, int], torch.Tensor]:
         """
         Compute the canonical order of the reps in the list of reps to sum over.
@@ -559,7 +567,7 @@ class SumRep(OpRep):
 
     @staticmethod
     def compute_canonical(
-        counters: list[dict[Rep, int]], perms: tuple[torch.Tensor]
+        counters: list[dict[Rep, int]], perms: tuple[torch.Tensor], device: torch.device
     ) -> tuple[dict[Rep, int], torch.Tensor]:
         """
         Compute the canonical order of the reps in the list of reps to sum over.
@@ -603,7 +611,7 @@ class SumRep(OpRep):
                 ids[i] += +c * rep.size
                 merged_counters[rep] += c
 
-        return merged_counters, torch.tensor(permlist)
+        return merged_counters, torch.tensor(permlist, device=device)
 
     @property
     def size(self) -> int:
@@ -660,16 +668,14 @@ class SumRep(OpRep):
         }
         mults = self.counters.values()
 
-        dtype = float
+        dtype = torch.float
         shape = (self.size, self.size)
 
         def lazy_P(P: torch.Tensor) -> torch.Tensor:
             P_flat = P.flatten()
             P_permed = P_flat[self.perm]
-            ldmm = lazy_direct_matmat(P_permed, list(Ps.values()), list(mults))[
-                self.invperm
-            ]
-            return ldmm.reshape(P.shape)
+            ldmm = lazy_direct_matmat(P_permed, list(Ps.values()), list(mults))
+            return ldmm[self.invperm].reshape(P.shape)
 
         class LazyP(LinearOperator):
             def __init__(self):
@@ -710,6 +716,10 @@ def distribute_product(reps: list[Rep]) -> Rep:
     """
     Expands product of sums into sums of products,(ρ₁⊕ρ₂)⊗ρ₃ = (ρ₁⊗ρ₃)⊕(ρ₂⊗ρ₃).
     """
+    assert len(reps) > 0
+
+    device = reps[0].device
+
     can_reps = []
     perms = []
     for repsum in reps:
@@ -735,7 +745,7 @@ def distribute_product(reps: list[Rep]) -> Rep:
     # case _:
     # raise ValueError("Permutation must be a torch.Tensor")
 
-    order = torch.arange(product(axis_sizes)).reshape(axis_sizes)
+    order = torch.arange(product(axis_sizes), device=device).reshape(axis_sizes)
     for i, perm in enumerate(perms):
         order = torch.swapaxes(torch.swapaxes(order, 0, i)[perm, ...], 0, i)
     order = order.reshape(-1)
@@ -748,7 +758,7 @@ def distribute_product(reps: list[Rep]) -> Rep:
         for r, c in rep.counters.items():
             this_rep_sizes.extend([c * r.size])
         repsizes_all.append(tuple(this_rep_sizes))
-    block_perm = rep_permutation(tuple(repsizes_all))
+    block_perm = rep_permutation(tuple(repsizes_all), device)
 
     # Product order -> multiplicity grouped ordering
     ordered_reps = []
@@ -769,7 +779,7 @@ def distribute_product(reps: list[Rep]) -> Rep:
         odds = num[1::2]
         axis_perm = evens + odds
         mul_perm = torch.permute(
-            torch.arange(len(can_perm)).reshape(shape), axis_perm
+            torch.arange(len(can_perm), device=device).reshape(shape), axis_perm
         ).reshape(-1)
 
         each_perm.append(mul_perm[can_perm] + i)
@@ -781,17 +791,20 @@ def distribute_product(reps: list[Rep]) -> Rep:
 
 
 @lru_cache(maxsize=None)
-def rep_permutation(repsizes_all) -> torch.Tensor:
+def rep_permutation(
+    repsizes_all: tuple[tuple[int]], device: torch.device = DEFAULT_DEVICE
+) -> torch.Tensor:
     """
     Permutation from block ordering to flattened ordering.
     """
     size_cumsums = []
     for repsizes in repsizes_all:
-        padded_sizes = torch.tensor([0] + [size for size in repsizes])
-        # size_cumsums.append(torch.cumsum(torch.flatten(padded_sizes), 0))
+        padded_sizes = torch.tensor([0] + [size for size in repsizes], device=device)
         size_cumsums.append(torch.cumsum(padded_sizes, 0))
-    permutation = torch.zeros([cumsum[-1] for cumsum in size_cumsums], dtype=torch.int)
-    arange = torch.arange(reduce(lambda x, y: x * y, permutation.size()))
+    permutation = torch.zeros(
+        [cumsum[-1] for cumsum in size_cumsums], dtype=torch.int, device=device
+    )
+    arange = torch.arange(reduce(lambda x, y: x * y, permutation.size()), device=device)
     indices_iter = itertools.product(
         *[range(len(repsizes)) for repsizes in repsizes_all]
     )
@@ -833,13 +846,16 @@ class ProductRep(OpRep):
         self,
         inreps: dict[Rep, int] | list[Rep],
         extra_perm: Optional[torch.Tensor] = None,
+        device: torch.device = DEFAULT_DEVICE,
     ):
-        super().__init__(inreps, extra_perm)
+        super().__init__(inreps, extra_perm, device=device)
         assert self.G is not None, "Can only take products of reps of the same group"
 
     @staticmethod
     def compute_canonical(
-        counters: list[dict[Rep, int]], perms: tuple[torch.Tensor]
+        counters: list[dict[Rep, int]],
+        perms: tuple[torch.Tensor],
+        device: torch.device = DEFAULT_DEVICE,
     ) -> tuple[dict[Rep, int], torch.Tensor]:
         """
         Compute the canonical order of the reps in the list of reps to multiply
@@ -859,9 +875,9 @@ class ProductRep(OpRep):
             perm: pemutation to be applied to the collection of reps to get the
                   canonical order
         """
-        order = torch.arange(product(len(perm) for perm in perms)).reshape(
-            tuple(len(perm) for perm in perms)
-        )
+        order = torch.arange(
+            product(len(perm) for perm in perms), device=device
+        ).reshape(tuple(len(perm) for perm in perms))
         in_reps = [counter.keys() for counter in counters]
         merged_reps = reduce(lambda set1, set2: set1 | set2, in_reps)
         can_reps = sorted(merged_reps)
@@ -876,7 +892,7 @@ class ProductRep(OpRep):
         for counter in counters:
             idsi = {}
             for rep, c in counter.items():
-                idsi[rep] = n + torch.arange(c)
+                idsi[rep] = n + torch.arange(c, device=device)
                 n += c
             ids.append(idsi)
 
@@ -961,8 +977,11 @@ class DirectProduct(ProductRep):
         self,
         reps: dict[Rep, int] | list[Rep],
         extra_perm: Optional[torch.Tensor] = None,
+        device: torch.device = DEFAULT_DEVICE,
     ):
-        OpRep.__init__(self, reps, extra_perm)  # don't inherit from ProductRep
+        OpRep.__init__(
+            self, reps, extra_perm, device=device
+        )  # don't inherit from ProductRep
         assert all(count == 1 for count in self.counters.values())
 
     def rho(self, g: GroupElem) -> ReprElem:
@@ -998,7 +1017,8 @@ class DeferredOpRep(Rep, ABC):
     The list of Reps to OpRep together is saved in self.to_op.
     """
 
-    def __init__(self, reps: list[Rep]):
+    def __init__(self, reps: list[Rep], device: torch.device = DEFAULT_DEVICE):
+        self.device = device
         self.G = None
         self.to_op = []
 
@@ -1047,7 +1067,7 @@ class DeferredSumRep(DeferredOpRep):
         if G is None:
             # return self.__class__(self.to_op)
             return self
-        return SumRep([rep(G) for rep in self.to_op])
+        return SumRep([rep(G) for rep in self.to_op], device=self.device)
 
     def __repr__(self):
         return "(" + "+".join(f"{rep}" for rep in self.to_op) + ")"
@@ -1068,15 +1088,20 @@ class DeferredProductRep(DeferredOpRep):
         if G is None:
             # return self.__class__(self.to_op)
             return self
-        return reduce(lambda a, b: a * b, [rep(G) for rep in self.to_op])
+        return reduce(
+            lambda a, b: a * b, [rep(G, device=self.device) for rep in self.to_op]
+        )
 
     def __repr__(self):
         return "⊗".join(f"{rep}" for rep in self.to_op)
 
 
 class ScalarRep(Rep):
-    def __init__(self, G: Optional[Group] = None):
+    def __init__(
+        self, G: Optional[Group] = None, device: torch.device = DEFAULT_DEVICE
+    ):
         self.G = G
+        self.device = device
         self.is_permutation = True
 
     def __call__(self, G: Optional[Group]) -> Rep:
@@ -1093,16 +1118,16 @@ class ScalarRep(Rep):
         return "V⁰"
 
     def rho(self, g: GroupElem) -> ReprElem:
-        return torch.eye(1)
+        return torch.eye(1, device=self.device)
 
     def drho(self, A: LieAlgebraElem) -> ReprElem:
-        return 0 * torch.eye(1)
+        return 0 * torch.eye(1, device=self.device)
 
     def constraint_matrix(self) -> LinearOperator:
         raise NotImplementedError
 
     def equivariant_basis(self):
-        return torch.ones((1, 1))
+        return torch.ones((1, 1), device=self.device)
 
     def __hash__(self) -> int:
         return 0
@@ -1135,14 +1160,19 @@ class Base(Rep):
     representations.
     """
 
-    def __init__(self, G: Optional[Group] = None):
+    def __init__(
+        self, G: Optional[Group] = None, device: torch.device = DEFAULT_DEVICE
+    ):
         self.G = G
+        self.device = device
         if G is not None:
             self.is_permutation = G.is_permutation
 
-    def __call__(self, G: Group) -> "Base":
+    def __call__(self, G: Group, device: Optional[torch.device] = None) -> "Base":
         # return self.__class__(G)
-        return Base(G)
+        if device is not None:
+            return Base(G, device=device)
+        return Base(G, device=self.device)
 
     def rho(self, g: GroupElem | dict[Group, torch.Tensor]) -> ReprElem:
         if isinstance(g, GroupElem):
@@ -1169,7 +1199,7 @@ class Base(Rep):
     def T(self) -> "Base":
         if self.G is not None and self.G.is_orthogonal:
             return self
-        return Dual(self)
+        return Dual(self, device=self.device)
 
     def __repr__(self) -> str:
         return "V"
@@ -1193,12 +1223,13 @@ class Dual(Base):
     Dual representation to the input representation.
     """
 
-    def __init__(self, rep: Base):
+    def __init__(self, rep: Base, device: torch.device = DEFAULT_DEVICE):
         self.rep = rep
         self.G = rep.G
         self.is_permutation = rep.is_permutation
+        self.device = device
 
-    def __call__(self, G: Group) -> Base:
+    def __call__(self, G: Group, device: torch.device = DEFAULT_DEVICE) -> Base:
         return self.rep(G).T
 
     def rho(self, g: GroupElem) -> ReprElem:
@@ -1257,6 +1288,8 @@ def bilinear_weights(inrep: SumRep, outrep: Rep):
     """
     Compute the bilinear weights for a given input and output representation.
     """
+    device = inrep.device
+
     # TODO this has a lot of work to be done to make it more efficient.
     # TODO refactor to "KLinear"
     # TODO replace with LazyDirectSum
@@ -1282,11 +1315,11 @@ def bilinear_weights(inrep: SumRep, outrep: Rep):
         [W_mults.get(rep, 0) * nelems(n, rep) for rep, n in x_mults.items()]
     )
 
-    inrep_dict = inrep.as_dict(torch.arange(inrep.size))
+    inrep_dict = inrep.as_dict(torch.arange(inrep.size, device=device))
     reduced_indices_dict = {}
     for rep, ids in inrep_dict.items():
         rand_indices = torch.randint(
-            low=0, high=len(ids), size=(nelems(len(ids), rep),)
+            low=0, high=len(ids), size=(nelems(len(ids), rep),), device=device
         )
         reduced_indices_dict[rep] = ids[rand_indices].reshape(-1)
 
@@ -1300,7 +1333,7 @@ def bilinear_weights(inrep: SumRep, outrep: Rep):
         Ws = []
         for rep, W_mult in W_mults.items():
             if rep not in x_mults:
-                Ws.append(torch.zeros((bs, W_mult * rep.size)))
+                Ws.append(torch.zeros((bs, W_mult * rep.size), device=device))
                 continue
 
             x_mult = x_mults[rep]

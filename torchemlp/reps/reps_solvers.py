@@ -3,6 +3,7 @@ import torch
 from tqdm import tqdm
 
 from torchemlp.ops import LinearOperator
+from torchemlp.utils import DEFAULT_DEVICE
 
 
 def orthogonal_complement(proj: torch.Tensor) -> torch.Tensor:
@@ -14,13 +15,15 @@ def orthogonal_complement(proj: torch.Tensor) -> torch.Tensor:
     return torch.conj(VH[rank:]).T
 
 
-def krylov_constraint_solve(C: LinearOperator, tol: float = 1e-5) -> torch.Tensor:
+def krylov_constraint_solve(
+    C: LinearOperator, tol: float = 1e-5, device: torch.device = DEFAULT_DEVICE
+) -> torch.Tensor:
     """
     Computes the solution basis Q for the linear constraint CQ = 0 and
     Q^T Q = I upt to the specified tolerance.
     """
 
-    Q = torch.tensor([[0]])  # fallback value
+    Q = torch.tensor([[0]], device=device)  # fallback value
     r = 5  # starting rank
 
     if C.shape[0] * r * 2 > 2e9:
@@ -50,6 +53,7 @@ def krylov_constraint_solve_upto_r(
     n_iters: int = 20_000,
     lr: float = 1e-2,
     momentum: float = 0.9,
+    device: torch.device = DEFAULT_DEVICE,
 ) -> torch.Tensor:
     """
     Iterative routine to compute the solution basis tot he constraint CQ = 0
@@ -59,8 +63,8 @@ def krylov_constraint_solve_upto_r(
     """
 
     # Define optimization problem
-    W = torch.randn(C.shape[-1], r, dtype=C.dtype) / torch.sqrt(
-        torch.tensor(C.shape[-1])
+    W = torch.randn(C.shape[-1], r, dtype=C.dtype, device=device) / torch.sqrt(
+        torch.tensor(C.shape[-1], device=device)
     )
     W.requires_grad = True
 
@@ -129,7 +133,9 @@ def krylov_constraint_solve_upto_r(
     return Q
 
 
-def sparsify_basis(Q: torch.Tensor, lr: float = 1e-2) -> torch.Tensor:
+def sparsify_basis(
+    Q: torch.Tensor, lr: float = 1e-2, device: torch.device = DEFAULT_DEVICE
+) -> torch.Tensor:
     """
     Attempt to sparsify a given basis by applying an orthogonal transformation
 
@@ -143,14 +149,15 @@ def sparsify_basis(Q: torch.Tensor, lr: float = 1e-2) -> torch.Tensor:
     """
 
     # Define optimization problem
-    W = torch.rand(Q.shape[-1], Q.shape[-1])
+    W = torch.rand(Q.shape[-1], Q.shape[-1], device=device)
     W, _ = torch.linalg.qr(W)
     W.requires_grad = True
 
     def loss_fn(W):
         return (
             torch.mean(torch.abs(Q @ W.T))
-            + 0.1 * torch.mean(torch.abs(W.T @ W - torch.eye(W.shape[0])))
+            + 0.1
+            * torch.mean(torch.abs(W.T @ W - torch.eye(W.shape[0], device=device)))
             + 0.01 * torch.linalg.slogdet(W)[1] ** 2
         )
 
@@ -175,7 +182,7 @@ def sparsify_basis(Q: torch.Tensor, lr: float = 1e-2) -> torch.Tensor:
     Q[torch.abs(Q) > 1e-2] = torch.sgn(Q)[torch.abs(Q) > 1e-2]
 
     # Check convergence
-    A = Q @ (1.0 + torch.arange(Q.shape[-1]))
+    A = Q @ (1.0 + torch.arange(Q.shape[-1], device=device))
     n_pivots = len(torch.unique(torch.abs(A)))
     if n_pivots != Q.shape[-1] and n_pivots != Q.shape[-1] + 1:
         print(f"Basis elems did not seperate, foun only {n_pivots}/{Q.shape[-1] + 1}")

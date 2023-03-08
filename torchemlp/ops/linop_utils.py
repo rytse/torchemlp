@@ -22,15 +22,19 @@ def lazify(op: Union[LinearOperator, torch.Tensor]) -> LinearOperator:
 def densify(op: Union[LinearOperator, torch.Tensor]) -> torch.Tensor:
     match op:
         case LinearOperator():
-            return op.dense
+            return op.dense()
         case torch.Tensor():
             return op
     return NotImplemented
 
 
 def kronsum(A_dense: torch.Tensor, B_dense: torch.Tensor) -> torch.Tensor:
-    return torch.kron(A_dense, torch.eye(B_dense.shape[-1])) + torch.kron(
-        torch.eye(A_dense.shape[-1]), B_dense
+    return torch.kron(
+        A_dense,
+        torch.eye(B_dense.shape[-1], dtype=B_dense.dtype, device=B_dense.device),
+    ) + torch.kron(
+        torch.eye(A_dense.shape[-1], dtype=A_dense.dtype, device=A_dense.device),
+        B_dense,
     )
 
 

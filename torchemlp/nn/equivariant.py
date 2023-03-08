@@ -25,8 +25,14 @@ class EquivariantLinear(nn.Module):
         self.Pw = self.rep_W.equivariant_projector()
         self.Pb = repout.equivariant_projector()
 
-        self.b = nn.Parameter(torch.rand((self.n_out,)) / sqrt(self.n_out))
-        self.w = nn.Parameter(nn.init.orthogonal_(torch.rand((self.n_out, self.n_in))))
+        self.b = nn.Parameter(
+            torch.rand(
+                (self.n_out,),
+            )
+            / sqrt(self.n_out)
+        )
+        w_init = nn.init.orthogonal_(torch.rand((self.n_out, self.n_in)))
+        self.w = nn.Parameter(w_init)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         W = self.Pw @ self.w
@@ -43,7 +49,14 @@ class EquivariantBiLinear(nn.Module):
         super(EquivariantBiLinear, self).__init__()
         self.W_dim, self.W_proj = bilinear_weights(repin, repout)  # TODO jit
         self.W = nn.Parameter(
-            torch.normal(torch.zeros((self.W_dim,)), torch.ones((self.W_dim,)))
+            torch.normal(
+                torch.zeros(
+                    (self.W_dim,),
+                ),
+                torch.ones(
+                    (self.W_dim,),
+                ),
+            )
         )
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
@@ -112,7 +125,12 @@ class GatedNonlinearity(nn.Module):
                 if ch_rep.is_permutation:
                     return indices
                 else:
-                    return torch.ones(ch_rep.size) * ch_rep.size
+                    return (
+                        torch.ones(
+                            ch_rep.size,
+                        )
+                        * ch_rep.size
+                    )
 
 
 class EMLPBlock(nn.Module):

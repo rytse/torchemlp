@@ -15,6 +15,8 @@ from torchemlp.ops import (
     Rot90,
 )
 
+from torchemlp.utils import DEFAULT_DEVICE
+
 
 def rel_err(A: torch.Tensor, B: torch.Tensor, epsilon: float = 1e-6) -> torch.Tensor:
     mad = torch.mean(torch.abs(A - B))  # mean abs diff
@@ -67,6 +69,11 @@ class Group(ABC):
         else:
             epsilon = 1e-6
 
+        if "device" in kwargs:
+            self.device = kwargs["device"]
+        else:
+            self.device = DEFAULT_DEVICE
+
         # Fill in self.d
         if self.d == -1:
             if len(self.lie_algebra) > 0:
@@ -80,11 +87,11 @@ class Group(ABC):
         if self.is_permutation:
             self.is_orthogonal = True
         if len(self.lie_algebra) > 0:
-            A_dense = torch.stack([A.dense for A in self.lie_algebra])
+            A_dense = torch.stack([A.dense() for A in self.lie_algebra])
             if rel_err(-torch.transpose(A_dense, 2, 1), A_dense) < epsilon:
                 self.is_orthogonal = True
         elif len(self.discrete_generators) > 0:
-            h_dense = torch.stack([h.dense for h in self.discrete_generators])
+            h_dense = torch.stack([h.dense() for h in self.discrete_generators])
             if rel_err(-torch.transpose(-h_dense, 2, 1), h_dense) < epsilon:
                 self.is_orthogonal = True
 
@@ -94,17 +101,15 @@ class Group(ABC):
             and len(self.lie_algebra) == 0
             and len(self.discrete_generators) > 0
         ):
-            h_dense = torch.cat([h.dense for h in self.discrete_generators], dim=0)
+            h_dense = torch.cat([h.dense() for h in self.discrete_generators], dim=0)
             if torch.all((h_dense == 1).sum(-1) == 1):
                 self.is_permutation = True
 
-    @property
     def dense_lie_algebra(self) -> torch.Tensor:
-        return torch.stack([lg.dense for lg in self.lie_algebra])
+        return torch.stack([lg.dense() for lg in self.lie_algebra])
 
-    @property
     def dense_discrete_generators(self) -> torch.Tensor:
-        return torch.stack([dg.dense for dg in self.discrete_generators])
+        return torch.stack([dg.dense() for dg in self.discrete_generators])
 
     def sample(self) -> GroupElem:
         """
@@ -116,23 +121,25 @@ class Group(ABC):
 
         # Basis of continuous generators
         if n_lie_bases > 0:
-            A_dense = self.dense_lie_algebra
+            A_dense = self.dense_lie_algebra()
         elif self.d != -1:
-            A_dense = torch.zeros((0, self.d, self.d))
+            A_dense = torch.zeros((0, self.d, self.d), device=self.device)
         else:
             raise NotImplementedError("No generators found")
 
         # Basis of discrete generators
         if n_discrete_gens > 0:
-            h_dense = self.dense_discrete_generators
+            h_dense = self.dense_discrete_generators()
         elif self.d != -1:
-            h_dense = torch.zeros((0, self.d, self.d))
+            h_dense = torch.zeros((0, self.d, self.d), device=self.device)
         else:
             raise NotImplementedError("No generators found")
 
         # Sampling noise
         z = self.z_scale * torch.randn(n_lie_bases)  # continous samples
-        ks = torch.randint(-5, 5, size=(h_dense.shape[0], 3))  # discrete samples
+        ks = torch.randint(
+            -5, 5, size=(h_dense.shape[0], 3), device=self.device
+        )  # discrete samples
 
         # Generate samples
         return self.__class__.noise2sample(z, ks, A_dense, h_dense)
@@ -160,7 +167,7 @@ class Group(ABC):
 
         # Output group element that will be mutated to its final state via action by the
         # continuous and discrete group generators
-        g = torch.eye(A_dense.shape[-1])
+        g = torch.eye(A_dense.shape[-1], dtype=A_dense.dtype, device=A_dense.device)
 
         # If there are continuous generators, take exp(z * A)
         if A_dense.shape[0]:
@@ -223,9 +230,9 @@ class SO(Group):
     The special orthogonal group SO(n)
     """
 
-    def __init__(self, n: int):
+    def __init__(self, n: int, device: torch.device = DEFAULT_DEVICE):
         n_gen = (n * (n - 1)) // 2
-        A_dense = torch.zeros((n_gen, n, n))
+        A_dense = torch.zeros((n_gen, n, n), device=device)
         k = 0
         for i in range(n):
             for j in range(i):
@@ -234,7 +241,7 @@ class SO(Group):
                 k += 1
         self.lie_algebra = [MatrixLinearOperator(AM) for AM in A_dense]
 
-        super().__init__(n)
+        super().__init__(n, device=device)
 
 
 class O(SO):
@@ -242,12 +249,12 @@ class O(SO):
     The orthogonal group O(n)
     """
 
-    def __init__(self, n: int):
-        h_dense = torch.eye(n)[None]
+    def __init__(self, n: int, device: torch.device = DEFAULT_DEVICE):
+        h_dense = torch.eye(n, device=device)[None]
         h_dense[0, 0, 0] = -1
         self.discrete_generators = [MatrixLinearOperator(hM) for hM in h_dense]
 
-        super().__init__(n)
+        super().__init__(n, device=device)
 
 
 class C(Group):
@@ -255,18 +262,19 @@ class C(Group):
     The cyclic group C_k in 2D
     """
 
-    def __init__(self, k: int):
-        theta = torch.tensor(2 * torch.pi / k)
-        h_dense = torch.zeros((1, 2, 2))
+    def __init__(self, k: int, device: torch.device = DEFAULT_DEVICE):
+        theta = torch.tensor(2 * torch.pi / k, device=device)
+        h_dense = torch.zeros((1, 2, 2), device=device)
         h_dense[0, :, :] = torch.tensor(
             [
                 [torch.cos(theta), torch.sin(theta)],
                 [-torch.sin(theta), torch.cos(theta)],
-            ]
+            ],
+            device=device,
         )
         self.discrete_generators = [MatrixLinearOperator(hM) for hM in h_dense]
 
-        super().__init__(k)
+        super().__init__(k, device=device)
 
 
 class D(C):
@@ -274,10 +282,10 @@ class D(C):
     The dihedral group D_k in 2D
     """
 
-    def __init__(self, k: int):
-        super().__init__(k)
+    def __init__(self, k: int, device: torch.device = DEFAULT_DEVICE):
+        super().__init__(k, device=device)
         self.discrete_generators += [
-            MatrixLinearOperator(torch.tensor([[-1, 0], [0, 1]]))
+            MatrixLinearOperator(torch.tensor([[-1, 0], [0, 1]], device=device))
         ]
 
 
@@ -286,10 +294,10 @@ class Scaling(Group):
     The scaling group
     """
 
-    def __init__(self, n: int):
-        A_dense = torch.eye(n)[None]
+    def __init__(self, n: int, device: torch.device = DEFAULT_DEVICE):
+        A_dense = torch.eye(n, device=device)[None]
         self.lie_algebra = [MatrixLinearOperator(AM) for AM in A_dense]
-        super().__init__(n)
+        super().__init__(n, device=device)
 
 
 class Parity(Group):
@@ -297,12 +305,12 @@ class Parity(Group):
     The spacial parity group in (1+3)D
     """
 
-    def __init__(self):
-        h_dense = -torch.eye(4)[None]
+    def __init__(self, device: torch.device = DEFAULT_DEVICE):
+        h_dense = -torch.eye(4, device=device)[None]
         h_dense[0, 0, 0] = 1
         self.discrete_generators = [MatrixLinearOperator(hM) for hM in h_dense]
 
-        super().__init__((1, 3))
+        super().__init__((1, 3), device=device)
 
 
 class TimeReversal(Group):
@@ -310,12 +318,12 @@ class TimeReversal(Group):
     The time reversal group in (1+3)D
     """
 
-    def __init__(self):
-        h_dense = -torch.eye(4)[None]
+    def __init__(self, device: torch.device = DEFAULT_DEVICE):
+        h_dense = -torch.eye(4, device=device)[None]
         h_dense[0, 0, 0] = -1
         self.discrete_generators = [MatrixLinearOperator(hM) for hM in h_dense]
 
-        super().__init__((1, 3))
+        super().__init__((1, 3), device=device)
 
 
 class SO13p(Group):
@@ -323,18 +331,18 @@ class SO13p(Group):
     The component of the Lorentz group connected to the identity, SO+(1, 3)
     """
 
-    def __init__(self):
-        A_dense = torch.zeros((6, 4, 4))
-        A_dense[3:, 1:, 1:] = SO(3).dense_lie_algebra
+    def __init__(self, device: torch.device = DEFAULT_DEVICE):
+        A_dense = torch.zeros((6, 4, 4), device=device)
+        A_dense[3:, 1:, 1:] = SO(3, device=device).dense_lie_algebra()
 
         for i in range(3):
             A_dense[i, 1 + i, 0] = 1.0
             A_dense[i, 0, 1 + i] = 1.0
 
         self.lie_algebra = [MatrixLinearOperator(AM) for AM in A_dense]
-        self.z_scale = torch.tensor([0.3, 0.3, 0.3, 1.0, 1.0, 1.0])
+        self.z_scale = torch.tensor([0.3, 0.3, 0.3, 1.0, 1.0, 1.0], device=device)
 
-        super().__init__((1, 3))
+        super().__init__((1, 3), device=device)
 
 
 class SO13(SO13p):
@@ -342,11 +350,11 @@ class SO13(SO13p):
     The special Lorentz group, SO(1, 3)
     """
 
-    def __init__(self):
-        h_dense = -torch.eye(4)[None]
+    def __init__(self, device: torch.device = DEFAULT_DEVICE):
+        h_dense = -torch.eye(4, device=device)[None]
         self.discrete_generators = [MatrixLinearOperator(hM) for hM in h_dense]
 
-        super().__init__()
+        super().__init__(device=device)
 
 
 class O13(SO13):
@@ -354,13 +362,15 @@ class O13(SO13):
     The Lorentz group, O(1, 3)
     """
 
-    def __init__(self):
-        h_dense = torch.eye(4)[None] + torch.zeros((2, 1, 1))
+    def __init__(self, device: torch.device = DEFAULT_DEVICE):
+        h_dense = torch.eye(4, device=device)[None] + torch.zeros(
+            (2, 1, 1), device=device
+        )
         h_dense[0] *= -1
         h_dense[1, 0, 0] = -1
         self.discrete_generators = [MatrixLinearOperator(hM) for hM in h_dense]
 
-        super().__init__()
+        super().__init__(device=device)
 
 
 class Lorentz(O13):
@@ -376,11 +386,11 @@ class SO11p(Group):
     The component of O(1, 1) connected to the identity, SO+(1, 1)
     """
 
-    def __init__(self):
-        A_dense = torch.tensor([[0.0, 1.0], [1.0, 0.0]])[None]
+    def __init__(self, device: torch.device = DEFAULT_DEVICE):
+        A_dense = torch.tensor([[0.0, 1.0], [1.0, 0.0]], device=device)[None]
         self.lie_algebra = [MatrixLinearOperator(AM) for AM in A_dense]
 
-        super().__init__((1, 1))
+        super().__init__((1, 1), device=device)
 
 
 class O11(SO11p):
@@ -388,13 +398,15 @@ class O11(SO11p):
     The Lorentz group O(1, 1)
     """
 
-    def __init__(self):
-        h_dense = torch.eye(2)[None] + torch.zeros((2, 1, 1))
+    def __init__(self, device: torch.device = DEFAULT_DEVICE):
+        h_dense = torch.eye(2, device=device)[None] + torch.zeros(
+            (2, 1, 1), device=device
+        )
         h_dense[0] *= -1
         h_dense[1, 0, 0] = -1
         self.discrete_generators = [MatrixLinearOperator(hM) for hM in h_dense]
 
-        super().__init__()
+        super().__init__(device=device)
 
 
 class Sp(Group):
@@ -402,8 +414,8 @@ class Sp(Group):
     The symplectic group Sp(m) in 2m dimensions
     """
 
-    def __init__(self, m: int):
-        A_dense = torch.zeros((m * (2 * m + 1), 2 * m, 2 * m))
+    def __init__(self, m: int, device: torch.device = DEFAULT_DEVICE):
+        A_dense = torch.zeros((m * (2 * m + 1), 2 * m, 2 * m), device=device)
         self.m = m
 
         k = 0
@@ -423,7 +435,7 @@ class Sp(Group):
 
         self.lie_algebra = [MatrixLinearOperator(AM) for AM in A_dense]
 
-        super().__init__(m)
+        super().__init__(m, device=device)
 
 
 class Z(Group):
@@ -441,12 +453,17 @@ class S(Group):
     The permutation group S_n
     """
 
-    def __init__(self, n: int):
-        perms = torch.arange(n)[None].int() + torch.zeros((n - 1, 1)).int()
-        perms[:, 0] = torch.arange(1, n)
-        perms[torch.arange(n - 1), torch.arange(1, n)[None]] = 0
+    def __init__(self, n: int, device: torch.device = DEFAULT_DEVICE):
+        perms = torch.arange(n, dtype=torch.int64, device=device)[None] + torch.zeros(
+            (n - 1, 1), dtype=torch.int64, device=device
+        )
+        perms[:, 0] = torch.arange(1, n, dtype=torch.int64, device=device)
+        perms[
+            torch.arange(n - 1, dtype=torch.int64, device=device),
+            torch.arange(1, n, dtype=torch.int64, device=device)[None],
+        ] = 0
         self.discrete_generators = [LazyPerm(perm) for perm in perms]
-        super().__init__(n)
+        super().__init__(n, device=device)
 
 
 class SL(Group):
@@ -454,8 +471,8 @@ class SL(Group):
     The special linear group SL(n)
     """
 
-    def __init__(self, n: int):
-        A_dense = torch.zeros((n * n - 1, n, n))
+    def __init__(self, n: int, device: torch.device = DEFAULT_DEVICE):
+        A_dense = torch.zeros((n * n - 1, n, n), device=device)
         k = 0
         for i in range(n):
             for j in range(n):
@@ -469,7 +486,7 @@ class SL(Group):
 
         self.lie_algebra = [MatrixLinearOperator(AM) for AM in A_dense]
 
-        super().__init__(n)
+        super().__init__(n, device=device)
 
 
 class GL(Group):
@@ -477,8 +494,8 @@ class GL(Group):
     The general linear group GL(n)
     """
 
-    def __init__(self, n: int):
-        A_dense = torch.zeros((n * n, n, n))
+    def __init__(self, n: int, device: torch.device = DEFAULT_DEVICE):
+        A_dense = torch.zeros((n * n, n, n), device=device)
         k = 0
         for i in range(n):
             for j in range(n):
@@ -487,7 +504,7 @@ class GL(Group):
 
         self.lie_algebra = [MatrixLinearOperator(AM) for AM in A_dense]
 
-        super().__init__(n)
+        super().__init__(n, device=device)
 
 
 class U(Group):
@@ -495,9 +512,9 @@ class U(Group):
     The unitary group U(N), complex
     """
 
-    def __init__(self, n: int):
-        lie_algebra_real = torch.zeros((n * n, n, n))
-        lie_algebra_imag = torch.zeros((n * n, n, n))
+    def __init__(self, n: int, device: torch.device = DEFAULT_DEVICE):
+        lie_algebra_real = torch.zeros((n * n, n, n), device=device)
+        lie_algebra_imag = torch.zeros((n * n, n, n), device=device)
 
         k = 0
         for i in range(n):
@@ -520,7 +537,7 @@ class U(Group):
         A_dense = lie_algebra_real + 1.0j * lie_algebra_imag
         self.lie_algebra = [MatrixLinearOperator(AM) for AM in A_dense]
 
-        super().__init__(n)
+        super().__init__(n, device=device)
 
 
 class SU(Group):
@@ -528,12 +545,12 @@ class SU(Group):
     The special unitary group SU(n), complex
     """
 
-    def __init__(self, n: int):
+    def __init__(self, n: int, device: torch.device = DEFAULT_DEVICE):
         if n == 1:
             return Trivial(1)
 
-        lie_algebra_real = torch.zeros((n * n, n, n))
-        lie_algebra_imag = torch.zeros((n * n, n, n))
+        lie_algebra_real = torch.zeros((n * n, n, n), device=device)
+        lie_algebra_imag = torch.zeros((n * n, n, n), device=device)
 
         k = 0
         for i in range(n):
@@ -559,7 +576,7 @@ class SU(Group):
         A_dense = lie_algebra_real + 1.0j * lie_algebra_imag
         self.lie_algebra = [MatrixLinearOperator(AM) for AM in A_dense]
 
-        super().__init__(n)
+        super().__init__(n, device=device)
 
 
 class Cube(Group):
@@ -615,43 +632,49 @@ class Embed(Group):
     A new group equivalent to an input group embedded in a larger vector space.
     """
 
-    def __init__(self, G: Group, d: int, slice: Union[slice, int] = slice(None)):
-        A_dense = torch.zeros((len(G.lie_algebra), d, d))
-        h_dense = torch.zeros((len(G.discrete_generators), d, d))
-        h_dense += torch.eye(d)
+    def __init__(
+        self,
+        G: Group,
+        d: int,
+        slice: Union[slice, int] = slice(None),
+        device: torch.device = DEFAULT_DEVICE,
+    ):
+        A_dense = torch.zeros((len(G.lie_algebra), d, d), device=device)
+        h_dense = torch.zeros((len(G.discrete_generators), d, d), device=device)
+        h_dense += torch.eye(d, device=device)
 
-        A_dense[:, slice, slice] = G.dense_lie_algebra
-        h_dense[:, slice, slice] = G.dense_discrete_generators
+        A_dense[:, slice, slice] = G.dense_lie_algebra()
+        h_dense[:, slice, slice] = G.dense_discrete_generators()
 
         self.lie_algebra = [MatrixLinearOperator(AM) for AM in A_dense]
         self.discrete_generators = [MatrixLinearOperator(AM) for AM in h_dense]
 
         self.name = f"{G}_R{d}"
-        super().__init__()
+        super().__init__(d, device=device)
 
     def __repr__(self) -> str:
         return self.name
 
 
-def SO2eR3():
+def SO2eR3(device: torch.device = DEFAULT_DEVICE):
     """
     SO(2) embedded in R^3 with rotations about the z axis
     """
-    return Embed(SO(2), 3, slice(2))
+    return Embed(SO(2), 3, slice(2), device=device)
 
 
-def O2eR3():
+def O2eR3(device: torch.device = DEFAULT_DEVICE):
     """
     O(2) embedded in R^3 with rotations about the z axis
     """
-    return Embed(O(2), 3, slice(2))
+    return Embed(O(2), 3, slice(2), device=device)
 
 
-def DkeR3(k):
+def DkeR3(k, device: torch.device = DEFAULT_DEVICE):
     """
     Dihedral D(k) embedded in R^3 with rotations about the z axis
     """
-    return Embed(D(k), 3, slice(2))
+    return Embed(D(k), 3, slice(2), device=device)
 
 
 class DirectProduct(Group):
@@ -669,6 +692,7 @@ class DirectProduct(Group):
         G1ks = [LazyKronsum([A1, 0 * I2]) for A1 in G1.lie_algebra]
         G2ks = [LazyKronsum([0 * I1, A2]) for A2 in G2.lie_algebra]
 
+        # TODO convince the type checker this is OK
         self.discrete_generators = G1k + G2k
         self.lie_algebra = G1ks + G2ks
 

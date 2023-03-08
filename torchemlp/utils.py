@@ -1,28 +1,40 @@
-import numpy as np
 import matplotlib.pyplot as plt
-import scipy.special
 
 import torch
 
 
-def merge_torch_types(dtype1, dtype2):
-    return (torch.ones(1, dtype=dtype1) * torch.ones(1, dtype=dtype2)).dtype
+DEFAULT_DEVICE = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 
 
-def vis_basis(basis, shape, cluster=True):
-    Q = basis @ np.eye(basis.shape[-1])  # convert to a dense matrix if necessary
-    v = np.random.randn(Q.shape[0])  # sample random vector
+def merge_torch_types(dtype1, dtype2, device: torch.device = DEFAULT_DEVICE):
+    return (
+        torch.ones(1, dtype=dtype1, device=device)
+        * torch.ones(1, dtype=dtype2, device=device)
+    ).dtype
+
+
+def vis_basis(basis, shape):
+    device = basis.device
+
+    Q = basis @ torch.eye(
+        basis.shape[-1], device=device
+    )  # convert to a dense matrix if necessary
+
+    v = torch.randn(Q.shape[0], device=device)  # sample random vector
     v = Q @ (Q.T @ v)  # project onto equivariant subspace
+
     if v is not None:
-        plt.imshow(v.reshape(shape))
+        plt.imshow(torch.abs(v).detach().cpu().numpy().reshape(shape))
         plt.axis("off")
     else:
         print("Q @ (Q.T @ v) failed")
 
 
-def vis(repin, repout, cluster=True):
-    Q = (repin >> repout).equivariant_basis().dense  # compute the equivariant basis
-    vis_basis(Q, (repout.size, repin.size), cluster)  # visualize it
+def vis(repin, repout):
+    Q = (
+        (repin >> repout).equivariant_basis().dense(device=repin.device)
+    )  # compute the equivariant basis
+    vis_basis(Q, (repout.size, repin.size))  # visualize it
 
 
 def lambertW(ch, d) -> int:

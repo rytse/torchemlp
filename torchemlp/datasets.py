@@ -5,6 +5,7 @@ import functorch
 
 from torchemlp.groups import Group, O
 from torchemlp.reps import Rep, Vector, Scalar, T
+from torchemlp.utils import DEFAULT_DEVICE
 
 
 class GroupAugmentation(nn.Module):
@@ -33,7 +34,7 @@ class GroupAugmentation(nn.Module):
 
 
 class Inertia(object):
-    def __init__(self, N=1024, k=5, device=None):
+    def __init__(self, N=1024, k=5, device: torch.device = DEFAULT_DEVICE):
         self.dim = (1 + 3) * k
 
         self.X = torch.randn(N, self.dim, device=device)
@@ -55,18 +56,18 @@ class Inertia(object):
 
         Xmean = self.X.mean(0)
         Xmean[k:] = 0.0
-        Xstd = torch.zeros_like(Xmean, device=device)
+        Xstd = torch.zeros_like(Xmean, dtype=Xmean.dtype, device=device)
         Xstd[:k] = torch.abs(self.X[:, :k]).mean(0)
         Xstd[k:] = (
             torch.abs(
                 self.X[:, k:].reshape(N, k, 3).mean((0, 2))[:, None]
-                + torch.zeros((k, 3), device=device)
+                + torch.zeros((k, 3), dtype=Xstd.dtype, device=device)
             )
         ).reshape(k * 3)
 
         Ymean = 0 * self.Y.mean(0)
         Ystd = torch.abs(self.Y - Ymean).mean((0, 1)) + torch.zeros_like(
-            Ymean, device=device
+            Ymean, dtype=Ymean.dtype, device=device
         )
 
         self.stats = [0.0, 1.0, 0.0, 1.0]

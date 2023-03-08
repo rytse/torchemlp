@@ -38,9 +38,8 @@ class LazyKron(LinearOperator):
     def invT(self) -> LinearOperator:
         return LazyKron([Mi.invT() for Mi in self.Ms])
 
-    @property
     def dense(self) -> torch.Tensor:
-        Ms_dense = [M.dense if isinstance(M, LinearOperator) else M for M in self.Ms]
+        Ms_dense = [M.dense() if isinstance(M, LinearOperator) else M for M in self.Ms]
         return reduce(torch.kron, Ms_dense)  # reducing via kronecker product
 
 
@@ -72,9 +71,8 @@ class LazyKronsum(LinearOperator):
     def adjoint(self) -> LinearOperator:
         return LazyKronsum([Mi.H for Mi in self.Ms])
 
-    @property
     def dense(self) -> torch.Tensor:
-        Ms_dense = [M.dense if isinstance(M, LinearOperator) else M for M in self.Ms]
+        Ms_dense = [M.dense() if isinstance(M, LinearOperator) else M for M in self.Ms]
         return reduce(kronsum, Ms_dense)  # reducing via kronecker sum
 
 
@@ -134,22 +132,37 @@ class LazyConcat(LinearOperator):
         super().__init__(Ms[0].dtype, shape)
 
     def matvec(self, v: torch.Tensor) -> torch.Tensor:
-        return torch.cat([M @ v for M in self.Ms], dim=0)
+        Mvs_ambig = [M @ v for M in self.Ms]
+        Mvs_tensor = []
+        for Mv in Mvs_ambig:
+            match Mv:
+                case LinearOperator():
+                    Mvs_tensor.append(Mv.dense())
+                case torch.Tensor():
+                    Mvs_tensor.append(Mv)
+        return torch.cat(Mvs_tensor, dim=0)
 
     def rmatvec(self, v: torch.Tensor) -> torch.Tensor:
         return torch.cat([M.H @ v for M in self.Ms], dim=0)
 
     def matmat(self, B: torch.Tensor) -> torch.Tensor:
-        return torch.cat([M @ B for M in self.Ms], dim=0)
+        MBs_ambig = [M @ B for M in self.Ms]
+        MBs_tensor = []
+        for MB in MBs_ambig:
+            match MB:
+                case LinearOperator():
+                    MBs_tensor.append(MB.dense())
+                case torch.Tensor():
+                    MBs_tensor.append(MB)
+        return torch.cat(MBs_tensor, dim=0)
 
     def rmatmat(self, B: torch.Tensor) -> torch.Tensor:
         Bs = torch.split(B, len(self.Ms))
         MHBs = [self.Ms[i].H @ Bs[i] for i in range(len(self.Ms))]
         return reduce(lambda x, y: x + y, MHBs)
 
-    @property
     def dense(self) -> torch.Tensor:
-        Ms_dense = [M.dense if isinstance(M, LinearOperator) else M for M in self.Ms]
+        Ms_dense = [M.dense() if isinstance(M, LinearOperator) else M for M in self.Ms]
         return torch.cat(Ms_dense, dim=0)
 
 
@@ -178,10 +191,11 @@ class LazyDirectSum(LinearOperator):
     def invT(self) -> LinearOperator:
         return LazyDirectSum([Mi.invT() for Mi in self.Ms], self.mults)
 
-    @property
     def dense(self) -> torch.Tensor:
         Ms_all = [M for M, c in zip(self.Ms, self.mults) for _ in range(c)]
-        Ms_dense = [Mi.dense if isinstance(Mi, LinearOperator) else Mi for Mi in Ms_all]
+        Ms_dense = [
+            Mi.dense() if isinstance(Mi, LinearOperator) else Mi for Mi in Ms_all
+        ]
         return torch.block_diag(*Ms_dense)
 
 
