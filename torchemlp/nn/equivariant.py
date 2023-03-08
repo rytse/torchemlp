@@ -8,7 +8,7 @@ import torch.nn.functional as F
 
 from torchemlp.utils import lambertW, binom
 from torchemlp.groups import Group
-from torchemlp.reps import Rep, T, SumRep, Scalar, ScalarRep, bilinear_weights
+from torchemlp.reps import Rep, T, SumRep, Scalar, ScalarRep, Zero, bilinear_weights
 
 
 class EquivariantLinear(nn.Module):
@@ -220,11 +220,11 @@ class EMLP(nn.Module):
             rep: direct sum representation of the Rep with dim(V) = ch
         """
         d = G.d
-        Ns = torch.zeros((lambertW(ch, d) + 1,), dtype=torch.int)
+        Ns = torch.zeros((lambertW(ch, d) + 1,), dtype=torch.int64)
         while ch > 0:
             max_rank = lambertW(ch, d)
             Ns[: max_rank + 1] += torch.tensor(
-                [d ** (max_rank - r) for r in range(max_rank + 1)], dtype=torch.int
+                [d ** (max_rank - r) for r in range(max_rank + 1)], dtype=torch.int64
             )
             ch -= (max_rank + 1) * d**max_rank  # leftover
 
@@ -245,7 +245,7 @@ class EMLP(nn.Module):
         to r to match the binomial distribution.
         """
         if n == 0:
-            return Scalar(G)
+            return Zero
 
         n_binoms: int = n // (2**r)
         n_leftover: int = n % (2**r)
@@ -257,7 +257,6 @@ class EMLP(nn.Module):
         ragged = sum([T(int(p), r - int(p), G) for p in ps])
 
         out = even_split + ragged
-
         match out:
             case int():
                 raise ValueError(

@@ -79,9 +79,11 @@ class Standardize(nn.Module):
 
 
 class RegressionLightning(pl.LightningModule):
-    def __init__(self, model):
+    def __init__(self, model, lr=3e-3, weight_decay=0.0):
         super().__init__()
         self.model = model
+        self.lr = lr
+        self.weight_decay = weight_decay
 
     def training_step(self, batch, batch_idx):
         x, y = batch
@@ -104,5 +106,7 @@ class RegressionLightning(pl.LightningModule):
         self.log("val_loss", loss)
 
     def configure_optimizers(self):
-        optimizer = optim.Adam(self.parameters(), lr=3e-3, weight_decay=1e-4)
+        optimizer = optim.Adam(
+            self.parameters(), lr=self.lr, weight_decay=self.weight_decay
+        )
         return optimizer
