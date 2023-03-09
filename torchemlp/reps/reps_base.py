@@ -1367,8 +1367,7 @@ def bilinear_weights(inrep: SumRep, outrep: Rep):
             if rep not in x_mults:
                 start_index += local_w_size
                 continue
-            x_mult = x_mults[rep]
-            n = nelems(x_mult, rep)
+            n = nelems(x_mults[rep], rep)
             N.append(n)
             
             i_end = i + W_mult * n
@@ -1380,87 +1379,41 @@ def bilinear_weights(inrep: SumRep, outrep: Rep):
             W_REGIONS.append((start_index, start_index+local_w_size))
             W_MULT.append(W_mult)
             REP_SIZES.append(rep.size)
+            start_index +=local_w_size
         
         return I_REGIONS, W_REGIONS, N, BIDS, W_MULT, REP_SIZES
     I_REGIONS, W_REGIONS, N, BIDS, W_MULT, REP_SIZES = helper()
 
-    def lazy_proj_fast2(params: torch.Tensor, x: torch.Tensor):
+    def lazy_proj_fast(params: torch.Tensor, x: torch.Tensor):
         assert len(params.shape) <= 1
         assert len(x.shape) == 2
-        #print(x.shape)
         bshape = x.shape[:-1]
         x = x.reshape(-1, x.shape[-1])
         bs = x.shape[0]
-        #W  = torch.zeros((bs, W_alloc_size), device=device)
+        x_binned = [x[..., bids] for bids in BIDS]
         return lazy_proj_jit(
-            params,x,W_alloc_size,device,I_REGIONS,W_REGIONS, N, BIDS, REP_SIZES, W_MULT
+            params,x_binned,bs,W_alloc_size,device,I_REGIONS,W_REGIONS, N, REP_SIZES, W_MULT
         )[..., W_invperm].reshape(*bshape, *W_shape)
     @torch.jit.script
     def lazy_proj_jit(params: torch.Tensor,
-                    x: torch.Tensor,
+                    x_binned: list[torch.Tensor],
+                    bs: int,
                     W_alloc_size: int,
                     device: torch.device,
                     I_REGIONS: list[tuple[int, int]],
                     W_REGIONS: list[tuple[int, int]],
                     N: list[int],
-                    BIDS: list[torch.Tensor],
                     REP_SIZES: list[int],
                     W_MULT: list[int]
                       ):
-        x = x.reshape(-1, x.shape[-1])
-        bs = x.shape[0]
+        
         W  = torch.zeros((bs, W_alloc_size), device=device)
-        for (i_start, i_end), (w_start, w_end),n,bids, rep_size, w_mult in zip(I_REGIONS, W_REGIONS, N, BIDS, REP_SIZES, W_MULT):
+        for i,((i_start, i_end), (w_start, w_end),n, rep_size, w_mult) in enumerate(zip(I_REGIONS, W_REGIONS, N, REP_SIZES, W_MULT)):
             bilinear_params = params[i_start:i_end].reshape(w_mult, n)
-            W[:, w_start:w_end] = (bilinear_params @ x[:, bids].T.reshape(n, rep_size * bs)).reshape(w_mult*rep_size,bs).T
+            W[:, w_start:w_end] = (bilinear_params @ x_binned[i].T.reshape(n, rep_size * bs)).reshape(w_mult*rep_size,bs).T
         return W
 
-    # TODO jit
-    def lazy_proj_fast(params: torch.Tensor, x: torch.Tensor):
-        assert len(params.shape) <= 1
-        assert len(x.shape) == 2
-        #print(x.shape)
-        bshape = x.shape[:-1]
-        x = x.reshape(-1, x.shape[-1])
-        bs = x.shape[0]
-
-        i = 0
-        W  = torch.zeros((bs, W_alloc_size), device=device)
-        start_index = 0
-        '''
-        
-        '''
-
-        for rep, W_mult in W_mults.items():
-            local_w_size = W_mult * rep.size
-            if rep not in x_mults:
-                #Ws.append(torch.zeros((bs, W_mult * rep.size), device=device))
-                start_index += local_w_size
-                continue
-
-            x_mult = x_mults[rep]
-            n = nelems(x_mult, rep)
-            i_end = i + W_mult * n
-            bids = reduced_indices_dict[rep]
-
-            W[:, start_index:start_index+local_w_size] = helper(params, 
-                                                                i, i_end, W_mult, x, bids, rep.size, n, bs, local_w_size)
-
-            i = i_end
-            #W[:, start_index:start_index+local_w_size] = (bilinear_params @ x[..., bids].T.reshape(n, rep.size * bs)).reshape(local_w_size,bs).T
-            #torch.matmul(bilinear_params, )
-            #W[:, start_index:start_index+local_w_size]  = bilinear_elems
-            #bilinear_elems.reshape(local_w_size,bs).T  
-            start_index += local_w_size
-            #Ws.append(bilinear_elems)
-        #Ws = torch.cat(Ws, dim=-1)
-        return W[..., W_invperm].reshape(*bshape, *W_shape)
-
-
-    @torch.jit.script
-    def helper(params: torch.Tensor, i: int, i_end: int, W_mult: int, x: torch.Tensor, bids: torch.Tensor, rep_size: int, n: int, bs: int, local_w_size: int):
-        bilinear_params = params[i:i_end].reshape(W_mult, n)
-        return (bilinear_params @ x[:, bids].T.reshape(n, rep_size * bs)).reshape(local_w_size,bs).T
+   
         
     # TODO jit
     def lazy_proj(params: torch.Tensor, x: torch.Tensor):
@@ -1493,4 +1446,4 @@ def bilinear_weights(inrep: SumRep, outrep: Rep):
         Ws = torch.cat(Ws, dim=-1)
         return Ws[..., W_invperm].reshape(*bshape, *W_shape)
 
-    return active_dims, lazy_proj_fast2
+    return active_dims, lazy_proj_fast
