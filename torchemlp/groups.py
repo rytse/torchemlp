@@ -15,14 +15,7 @@ from torchemlp.ops import (
     Rot90,
 )
 
-from torchemlp.utils import DEFAULT_DEVICE
-
-
-def rel_err(A: torch.Tensor, B: torch.Tensor, epsilon: float = 1e-6) -> torch.Tensor:
-    mad = torch.mean(torch.abs(A - B))  # mean abs diff
-    ama = torch.mean(torch.abs(A))  # a mean abs
-    bma = torch.mean(torch.abs(B))  # b mean abs
-    return mad / (ama + bma + epsilon)
+from torchemlp.utils import DEFAULT_DEVICE, rel_rms_diff
 
 
 # Type aliases for group elements, which will always be dense matrices
@@ -88,11 +81,11 @@ class Group(ABC):
             self.is_orthogonal = True
         if len(self.lie_algebra) > 0:
             A_dense = torch.stack([A.dense() for A in self.lie_algebra])
-            if rel_err(-torch.transpose(A_dense, 2, 1), A_dense) < epsilon:
+            if rel_rms_diff(-torch.transpose(A_dense, 2, 1), A_dense) < epsilon:
                 self.is_orthogonal = True
         elif len(self.discrete_generators) > 0:
             h_dense = torch.stack([h.dense() for h in self.discrete_generators])
-            if rel_err(-torch.transpose(-h_dense, 2, 1), h_dense) < epsilon:
+            if rel_rms_diff(-torch.transpose(-h_dense, 2, 1), h_dense) < epsilon:
                 self.is_orthogonal = True
 
         # Check permutation flag
@@ -136,7 +129,9 @@ class Group(ABC):
             raise NotImplementedError("No generators found")
 
         # Sampling noise
-        z = self.z_scale * torch.randn(n_lie_bases)  # continous samples
+        z = self.z_scale * torch.randn(
+            n_lie_bases, device=self.device
+        )  # continous samples
         ks = torch.randint(
             -5, 5, size=(h_dense.shape[0], 3), device=self.device
         )  # discrete samples

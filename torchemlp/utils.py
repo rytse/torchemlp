@@ -13,6 +13,18 @@ def merge_torch_types(dtype1, dtype2, device: torch.device = DEFAULT_DEVICE):
     ).dtype
 
 
+def rel_rms_diff(
+    A: torch.Tensor, B: torch.Tensor, epsilon: float = 1e-6
+) -> torch.Tensor:
+    """
+    Relative root-mean-squared difference between two tensors.
+    """
+    mad = torch.mean(torch.abs(A - B))  # mean abs diff
+    ama = torch.mean(torch.abs(A))  # a mean abs
+    bma = torch.mean(torch.abs(B))  # b mean abs
+    return mad / (ama + bma + epsilon)
+
+
 def vis_basis(basis, shape):
     device = basis.device
 
