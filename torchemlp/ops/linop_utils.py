@@ -1,5 +1,5 @@
 from functools import reduce
-from typing import Union, List, Any
+from typing import Any
 
 import torch
 
@@ -10,22 +10,20 @@ def product(L: Any) -> Any:
     return reduce(lambda a, b: a * b, L)
 
 
-def lazify(op: Union[LinearOperator, torch.Tensor]) -> LinearOperator:
+def lazify(op: LinearOperator | torch.Tensor) -> LinearOperator:
     match op:
-        case LinearOperator():
-            return op
         case torch.Tensor():
             return Lazy(op)
-    return NotImplemented
+        case _:
+            return op
 
 
-def densify(op: Union[LinearOperator, torch.Tensor]) -> torch.Tensor:
+def densify(op: LinearOperator | torch.Tensor) -> torch.Tensor:
     match op:
-        case LinearOperator():
-            return op.dense()
         case torch.Tensor():
             return op
-    return NotImplemented
+        case _:
+            return op.dense()
 
 
 def kronsum(A_dense: torch.Tensor, B_dense: torch.Tensor) -> torch.Tensor:
@@ -39,7 +37,7 @@ def kronsum(A_dense: torch.Tensor, B_dense: torch.Tensor) -> torch.Tensor:
 
 
 def lazy_direct_matmat(
-    v: torch.Tensor, Ms: List[LinearOperator], mults: Union[List, torch.Tensor]
+    v: torch.Tensor, Ms: list[LinearOperator], mults: list | torch.Tensor
 ):
     k = v.shape[1] if len(v.shape) > 1 else 1
 

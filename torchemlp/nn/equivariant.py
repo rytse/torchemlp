@@ -6,7 +6,9 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from torchemlp.utils import lambertW, binom
+import functorch
+
+from torchemlp.utils import lambertW, binom, rel_rms_diff
 from torchemlp.groups import Group
 from torchemlp.reps import Rep, T, SumRep, Scalar, ScalarRep, Zero, bilinear_weights
 
@@ -264,3 +266,41 @@ class EMLP(nn.Module):
                 )
             case Rep():
                 return out
+
+    def equivariance_error(self, x: torch.Tensor) -> torch.Tensor:
+        """
+        Determine how far the EMLP is from equivariance for a given
+        input-output pair (x, self(x)) by sampling from the symmetry group and
+        checking different the group-acted outputs are from the original,
+        untransformed output.
+        """
+        batch_size = x.shape[0]
+
+        gs = self.G.samples(batch_size)
+
+        act_in = torch.eye(x.shape[-1], device=x.device).repeat(batch_size, 1, 1)
+        act_out = torch.eye(self(x).shape[-1], device=x.device).repeat(batch_size, 1, 1)
+
+        if len(self.G.discrete_generators) > 0:
+            rho_gin = torch.stack([self.repin.rho_dense(g) for g in gs])
+            rho_gout = torch.stack([self.repout.rho_dense(g) for g in gs])
+            act_in = torch.bmm(rho_gin, act_in)
+            act_out = torch.bmm(rho_gout, act_out)
+
+        if len(self.G.lie_algebra) > 0:
+            drho_gin = torch.stack([self.repin.drho_dense(g) for g in gs])
+            drho_gout = torch.stack([self.repout.drho_dense(g) for g in gs])
+            act_in = torch.bmm(drho_gin, act_in)
+            act_out = torch.bmm(drho_gout, act_out)
+
+        if torch.count_nonzero(act_in) > 0:
+            y1 = self((act_in @ x[..., None])[..., 0])
+        else:
+            y1 = self(x)
+
+        if torch.count_nonzero(act_out) > 0:
+            y2 = (act_out @ self(x)[..., None])[..., 0]
+        else:
+            y2 = self(x)
+
+        return rel_rms_diff(y1, y2)

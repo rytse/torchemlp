@@ -175,7 +175,7 @@ class LazyDirectSum(LinearOperator):
     def __init__(self, Ms: List[LinearOperator], mults: List[int] = []):
         self.Ms = Ms
         self.mults = [1 for _ in self.Ms] if mults is None else mults
-        dim = sum(Mi.shape[0] * m for Mi, m in zip(Ms, mults))
+        dim = sum(Mi.shape[0] * m for Mi, m in zip(self.Ms, self.mults))
         shape = (dim, dim)
         super().__init__(Ms[0].dtype, shape)
 

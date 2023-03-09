@@ -7,9 +7,9 @@ import itertools
 import torch
 
 # from torchemlp.utils import (
-# GroupElem,
-# LieAlgebraElem,
-# ReprElem,
+# MatElem,
+# MatElem,
+# MatElem,
 # )
 
 from torchemlp.groups import Group
@@ -32,20 +32,7 @@ from torchemlp.utils import DEFAULT_DEVICE
 from .reps_utils import dictify_rep
 from .reps_solvers import orthogonal_complement, krylov_constraint_solve
 
-# Elements of a group embedded as a tensor or linear operator.
-# Has the same python type as LieAlgebraElem(s) and ReprElem(s), but we define
-# them differently so that our methods' type signatures are more helpful.
-GroupElem = torch.Tensor | LinearOperator
-
-# Elements of a group's Lie algebra embedded as a tensor or linear operator.
-# Has the same python type as GroupElem(s) and ReprElem(s), but we define them
-# differently so that our methods' type signatures are more helpful.
-LieAlgebraElem = torch.Tensor | LinearOperator
-
-# Representation of a group element as a tensor or linear operator.
-# Has the same python type as GroupElem(s) and LieAlgebraElem(s), but we define
-# them differently so that our methods' type signatures are more helpful.
-ReprElem = torch.Tensor | LinearOperator
+MatElem = torch.Tensor | LinearOperator
 
 
 class Rep(ABC):
@@ -75,20 +62,21 @@ class Rep(ABC):
             assert self.G.device == self.device
 
     @abstractmethod
-    def rho(self, g: GroupElem) -> ReprElem:
+    def rho(self, g: MatElem) -> MatElem:
         """
         Calculate the discrete group representation of an input matrix M.
         """
         pass
 
-    def drho(self, A: LieAlgebraElem) -> ReprElem:
+    def drho(self, A: MatElem) -> MatElem:
         """
         Calculate the Lie algebra representation of an input matrix A.
         """
-        if isinstance(A, torch.Tensor):
-            A_dense = A
-        elif isinstance(A, LinearOperator):
-            A_dense = A.dense()
+        match A:
+            case torch.Tensor():
+                A_dense = A
+            case LinearOperator():
+                A_dense = A.dense()
 
         I = torch.eye(A.shape[0], dtype=A.dtype, device=self.device)
         return LazyJVP(self.rho, I, A_dense)
@@ -135,10 +123,10 @@ class Rep(ABC):
         """
         return self, torch.arange(self.size, device=self.device)
 
-    def rho_dense(self, g: GroupElem) -> torch.Tensor:
+    def rho_dense(self, g: MatElem) -> torch.Tensor:
         return densify(self.rho(g))
 
-    def drho_dense(self, A: LieAlgebraElem) -> torch.Tensor:
+    def drho_dense(self, A: MatElem) -> torch.Tensor:
         return densify(self.drho(A))
 
     def constraint_matrix(self) -> LinearOperator:
@@ -358,10 +346,10 @@ class ZeroRep(Rep):
     Represents the zero vector.
     """
 
-    def rho(self, g: GroupElem) -> ReprElem:
+    def rho(self, g: MatElem) -> MatElem:
         return torch.zeros(g.shape, dtype=g.dtype)
 
-    def drho(self, A: LieAlgebraElem) -> ReprElem:
+    def drho(self, A: MatElem) -> MatElem:
         return torch.zeros(A.shape, dtype=A.dtype)
 
     def __call__(self, G: Group) -> Rep:
@@ -520,7 +508,7 @@ class OpRep(Rep, ABC):
         pass
 
     @abstractmethod
-    def drho(self, A: LieAlgebraElem | dict[Group, LieAlgebraElem]) -> ReprElem:
+    def drho(self, A: MatElem | dict[Group, MatElem]) -> MatElem:
         """
         The default Rep implementation of rho -> drho will not work!
         """
@@ -638,12 +626,12 @@ class SumRep(OpRep):
     def size(self) -> int:
         return sum(rep.size * count for rep, count in self.counters.items())
 
-    def rho(self, g: GroupElem) -> ReprElem:
+    def rho(self, g: MatElem) -> MatElem:
         rhos = [lazify(rep.rho(g)) for rep in self.counters]
         mults = list(self.counters.values())
         return LazyPerm(self.invperm) @ LazyDirectSum(rhos, mults) @ LazyPerm(self.perm)
 
-    def drho(self, A: LieAlgebraElem) -> ReprElem:
+    def drho(self, A: MatElem) -> MatElem:
         drhos = [lazify(rep.drho(A)) for rep in self.counters]
         mults = list(self.counters.values())
         return (
@@ -943,13 +931,13 @@ class ProductRep(OpRep):
     def size(self) -> int:
         return product([rep.size**count for rep, count in self.counters.items()])
 
-    def rho(self, g: GroupElem | dict[Group, GroupElem]) -> ReprElem:
+    def rho(self, g: MatElem | dict[Group, MatElem]) -> MatElem:
         match g:
             case dict():
                 if self.G is not None:
                     gg = g[self.G]
                 raise ValueError(
-                    "Must specify a GroupElem for ProductReps without a group"
+                    "Must specify a MatElem for ProductReps without a group"
                 )
             case _:
                 gg = g
@@ -959,13 +947,13 @@ class ProductRep(OpRep):
         )
         return LazyPerm(self.invperm) @ rho_can @ LazyPerm(self.perm)
 
-    def drho(self, A: LieAlgebraElem | dict[Group, LieAlgebraElem]) -> ReprElem:
+    def drho(self, A: MatElem | dict[Group, MatElem]) -> MatElem:
         match A:
             case dict():
                 if self.G is not None:
                     AA = A[self.G]
                 raise ValueError(
-                    "Must specify a LieGroupElem for ProductReps without a group"
+                    "Must specify a LieMatElem for ProductReps without a group"
                 )
             case _:
                 AA = A
@@ -1005,13 +993,13 @@ class DirectProduct(ProductRep):
         )  # don't inherit from ProductRep
         assert all(count == 1 for count in self.counters.values())
 
-    def rho(self, g: GroupElem) -> ReprElem:
+    def rho(self, g: MatElem) -> MatElem:
         canonical_lazy = LazyKron(
             [lazify(rep.rho(g)) for rep, c in self.counters.items() for _ in range(c)]
         )
         return LazyPerm(self.invperm) @ canonical_lazy @ LazyPerm(self.perm)
 
-    def drho(self, A: LieAlgebraElem) -> ReprElem:
+    def drho(self, A: MatElem) -> MatElem:
         canonical_lazy = LazyKronsum(
             [lazify(rep.drho(A)) for rep, c in self.counters.items() for _ in range(c)]
         )
@@ -1074,12 +1062,12 @@ class DeferredSumRep(DeferredOpRep):
     SumRep of an unspecified group.
     """
 
-    def rho(self, M: GroupElem) -> ReprElem:
+    def rho(self, M: MatElem) -> MatElem:
         rhos = [lazify(rep.rho(M)) for rep in self.to_op]
         mults = len(self.to_op) * [1]
         return LazyDirectSum(rhos, mults)  # faster way?
 
-    def drho(self, A: LieAlgebraElem) -> ReprElem:
+    def drho(self, A: MatElem) -> MatElem:
         drhos = [lazify(rep.drho(A)) for rep in self.to_op]
         mults = len(self.to_op) * [1]
         return LazyDirectSum(drhos, mults)  # faster way?
@@ -1099,10 +1087,10 @@ class DeferredProductRep(DeferredOpRep):
     ProductRep of an unspecified group.
     """
 
-    def rho(self, g: GroupElem) -> ReprElem:
+    def rho(self, g: MatElem) -> MatElem:
         return LazyKron([lazify(rep.rho(g)) for rep in self.to_op])
 
-    def drho(self, A: LieAlgebraElem) -> ReprElem:
+    def drho(self, A: MatElem) -> MatElem:
         return LazyKronsum([lazify(rep.drho(A)) for rep in self.to_op])
 
     def __call__(self, G: Optional[Group]) -> Rep:
@@ -1138,10 +1126,10 @@ class ScalarRep(Rep):
     def __repr__(self) -> str:
         return "V⁰"
 
-    def rho(self, g: GroupElem) -> ReprElem:
+    def rho(self, g: MatElem) -> MatElem:
         return torch.eye(1, device=self.device)
 
-    def drho(self, A: LieAlgebraElem) -> ReprElem:
+    def drho(self, A: MatElem) -> MatElem:
         return 0 * torch.eye(1, device=self.device)
 
     def constraint_matrix(self) -> LinearOperator:
@@ -1199,19 +1187,21 @@ class Base(Rep):
             return Base(G, device=device)
         return Base(G, device=self.device)
 
-    def rho(self, g: GroupElem | dict[Group, torch.Tensor]) -> ReprElem:
-        if isinstance(g, GroupElem):
+    def rho(self, g: MatElem | dict[Group, torch.Tensor]) -> MatElem:
+        if isinstance(g, MatElem):
             return g
         if self.G is not None and isinstance(g, dict) and self.G in g:
             return g[self.G]
-        raise ValueError("M must be a dictionary or a group element")
+        raise ValueError("M must be a MatElem or a dictionary")
 
-    def drho(self, A: LieAlgebraElem | dict[Group, torch.Tensor]) -> ReprElem:
-        if isinstance(A, LieAlgebraElem):
-            return A
-        if self.G is not None and isinstance(A, dict) and self.G in A:
-            return A[self.G]
-        raise ValueError("M must be a dictionary or a Lie algebra element")
+    def drho(self, A: MatElem | dict[Group, torch.Tensor]) -> MatElem:
+        match A:
+            case dict():
+                if self.G is not None and self.G in A:
+                    return A[self.G]
+                raise ValueError("M must be a MatElem or a valid dictionary")
+            case _:
+                return A
 
     @property
     def size(self) -> int:
@@ -1257,7 +1247,7 @@ class Dual(Base):
     def __call__(self, G: Group, device: torch.device = DEFAULT_DEVICE) -> Base:
         return self.rep(G).T
 
-    def rho(self, g: GroupElem) -> ReprElem:
+    def rho(self, g: MatElem) -> MatElem:
         rr = self.rep.rho(g)
         match rr:
             case torch.Tensor():
@@ -1265,7 +1255,7 @@ class Dual(Base):
             case LinearOperator():
                 return rr.invT()
 
-    def drho(self, A: LieAlgebraElem) -> ReprElem:
+    def drho(self, A: MatElem) -> MatElem:
         return -self.rep.drho(A).T
 
     def __repr__(self) -> str:
