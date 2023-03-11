@@ -51,7 +51,11 @@ def lazy_direct_matmat(
             v_slice = v_slice.T
 
         v_slice = v_slice.reshape(k * int(mult), M.shape[-1]).T
-        elems = M @ v_slice
+
+        if isinstance(M, torch.Tensor):
+            elems = M.clone().detach() @ v_slice
+        else:
+            elems = M.dense().clone().detach() @ v_slice
 
         y.append(elems.T.reshape(k, int(mult) * M.shape[0]).T)
         i = i_end

@@ -77,9 +77,12 @@ class GatedNonlinearity(nn.Module):
         self.rep = rep
         self.act = act
 
+        self.gate_indices = GatedNonlinearity.get_gate_indices(self.rep)
+        self.n_gates = self.rep.size
+
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        gate_scalars = x[..., self.__class__.get_gate_indices(self.rep)]
-        return self.act(gate_scalars) * x[..., : self.rep.size]
+        gate_scalars = x[..., self.gate_indices]
+        return self.act(gate_scalars) * x[..., : self.n_gates]
 
     @staticmethod
     def gated(ch_rep: Rep) -> Rep:

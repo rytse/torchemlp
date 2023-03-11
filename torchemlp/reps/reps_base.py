@@ -153,17 +153,17 @@ class Rep(ABC):
         canon_rep, perm = self.canonicalize()
         invperm = torch.argsort(perm)
 
-        if canon_rep not in self.solcache:
+        if canon_rep not in Rep.solcache:
             C = canon_rep.constraint_matrix()
             if C.shape[0] * C.shape[1] < 3e7:  # SVD
                 result = orthogonal_complement(C.dense())
             else:  # too big for SVD, use iterative krylov solver
                 result = krylov_constraint_solve(C)
-            self.solcache[canon_rep] = lazify(result)
+            Rep.solcache[canon_rep] = lazify(result)
 
         if all(invperm == perm):
-            return self.__class__.solcache[canon_rep]
-        return lazify(self.__class__.solcache[canon_rep].dense()[invperm])
+            return Rep.solcache[canon_rep]
+        return lazify(Rep.solcache[canon_rep].dense()[invperm])
 
     def equivariant_projector(self) -> LinearOperator:
         """
@@ -231,14 +231,14 @@ class Rep(ABC):
 
         match x:
             case ZeroRep():
-                return ZeroRep(self.G)
+                return ZeroRep(self.G, device=self.device)
             case ScalarRep():
                 return x.__mul__(self)
 
             case Rep():
                 if self.G is not None and x.G is not None:
-                    return ProductRep([self, x])
-                return DeferredProductRep([self, x])
+                    return ProductRep([self, x], device=self.device)
+                return DeferredProductRep([self, x], device=self.device)
 
             case int():
                 assert x >= 0, "Cannot multiply negative number of times"
@@ -246,10 +246,10 @@ class Rep(ABC):
                 if x == 1:
                     return self
                 elif x == 0:
-                    return ZeroRep(self.G)
+                    return ZeroRep(self.G, device=self.device)
                 elif self.G is not None:
-                    return SumRep([self for _ in range(x)])
-                return DeferredSumRep([self for _ in range(x)])
+                    return SumRep([self for _ in range(x)], device=self.device)
+                return DeferredSumRep([self for _ in range(x)], device=self.device)
 
     def __rmul__(self, x: Union["Rep", int]) -> "Rep":
         """
@@ -264,14 +264,14 @@ class Rep(ABC):
 
         match x:
             case ZeroRep():
-                return ZeroRep(self.G)
+                return ZeroRep(self.G, device=self.device)
             case ScalarRep():
                 return x.__rmul__(self)
 
             case Rep():
                 if self.G is not None and x.G is not None:
-                    return ProductRep([x, self])
-                return DeferredProductRep([x, self])
+                    return ProductRep([x, self], device=self.device)
+                return DeferredProductRep([x, self], device=self.device)
 
             case int():
                 assert x >= 0, "Cannot multiply negative number of times"
@@ -279,10 +279,10 @@ class Rep(ABC):
                 if x == 1:
                     return self
                 elif x == 0:
-                    return ZeroRep(self.G)
+                    return ZeroRep(self.G, device=self.device)
                 elif self.G is not None:
-                    return SumRep([self for _ in range(x)])
-                return DeferredSumRep([self for _ in range(x)])
+                    return SumRep([self for _ in range(x)], device=self.device)
+                return DeferredSumRep([self for _ in range(x)], device=self.device)
 
     def __pow__(self, other: int) -> "Rep":
         """
@@ -534,9 +534,8 @@ class OpRep(Rep, ABC):
         return self.__class__(self.counters), self.perm
 
     def __call__(self, G: Group) -> Rep:
-        return self.__class__(
-            {rep(G): c for rep, c in self.counters.items()}, self.perm
-        )
+        counters = {rep(G): c for rep, c in self.counters.items()}
+        return self.__class__(counters, self.perm)
 
     def __eq__(self, other: Rep) -> bool:
         match other:
@@ -1074,8 +1073,7 @@ class DeferredSumRep(DeferredOpRep):
 
     def __call__(self, G: Optional[Group]) -> Rep:
         if G is None:
-            # return self.__class__(self.to_op)
-            return self
+            return self.__class__(reps=list(self.to_op), device=self.device)
         return SumRep([rep(G) for rep in self.to_op], device=self.device)
 
     def __repr__(self):
@@ -1095,8 +1093,7 @@ class DeferredProductRep(DeferredOpRep):
 
     def __call__(self, G: Optional[Group]) -> Rep:
         if G is None:
-            # return self.__class__(self.to_op)
-            return self
+            return self.__class__(reps=list(self.to_op), device=self.device)
         return reduce(
             lambda a, b: a * b, [rep(G, device=self.device) for rep in self.to_op]
         )
@@ -1116,8 +1113,7 @@ class ScalarRep(Rep):
     def __call__(self, G: Optional[Group]) -> Rep:
         self.G = G
         return self
-        # TODO CHECK THAT ITS OK TO RETURN A NEW REPRESENTATION, NOT A COPY
-        # return ScalarRep(G)
+        # return self.__class__(G, device=self.device)
 
     @property
     def size(self) -> int:
@@ -1182,7 +1178,6 @@ class Base(Rep):
             self.is_permutation = G.is_permutation
 
     def __call__(self, G: Group, device: Optional[torch.device] = None) -> "Base":
-        # return self.__class__(G)
         if device is not None:
             return Base(G, device=device)
         return Base(G, device=self.device)
