@@ -156,6 +156,7 @@ class O5Synthetic(Dataset):
 
         super().__init__(dim, G, repin, repout, X, Y, stats)
 
+
 class Radius(Dataset):
     def __init__(self, N=1024, device: torch.device = DEFAULT_DEVICE):
         d = 3

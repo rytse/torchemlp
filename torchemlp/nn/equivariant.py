@@ -292,10 +292,10 @@ class EMLP(nn.Module):
         act_out = torch.bmm(rho_gout, act_out)
 
         # if len(self.G.lie_algebra) > 0:
-            # drho_gin = torch.stack([self.repin.drho_dense(g) for g in gs])
-            # drho_gout = torch.stack([self.repout.drho_dense(g) for g in gs])
-            # act_in = torch.bmm(drho_gin, act_in)
-            # act_out = torch.bmm(drho_gout, act_out)
+        # drho_gin = torch.stack([self.repin.drho_dense(g) for g in gs])
+        # drho_gout = torch.stack([self.repout.drho_dense(g) for g in gs])
+        # act_in = torch.bmm(drho_gin, act_in)
+        # act_out = torch.bmm(drho_gout, act_out)
 
         if torch.count_nonzero(act_in) > 0:
             y1 = self((act_in @ x[..., None])[..., 0])
