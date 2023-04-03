@@ -49,7 +49,7 @@ def vis(repin, repout):
     vis_basis(Q, (repout.size, repin.size))  # visualize it
 
 
-def lambertW(ch, d) -> int:
+def lambertW(ch: int, d: int) -> int:
     """
     Solve x * d^x = ch rounded down to the nearest integer.
     """
