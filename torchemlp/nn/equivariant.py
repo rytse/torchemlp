@@ -309,20 +309,19 @@ class EMLP(nn.Module):
         return rel_rms_diff(y1, y2)
 
 
-
 class EMLPode(EMLP):
-    def __init__(self, rep_in: Rep, rep_out: Rep, group: Group, ch = 384, num_layers=3):
+    def __init__(self, rep_in: Rep, rep_out: Rep, group: Group, ch=384, num_layers=3):
         super().__init__(rep_in, rep_out, group, ch, num_layers)
-        self.rep_in  = rep_in(group)
+        self.rep_in = rep_in(group)
         self.rep_out = rep_out(group)
         self.G = group
 
-        middle_layers =  [self.__class__.uniform_rep(ch, group) for _ in range(num_layers)]
+        middle_layers = [
+            self.__class__.uniform_rep(ch, group) for _ in range(num_layers)
+        ]
 
         reps = [self.rep_in] + middle_layers
         self.network = torch.nn.Sequential(
-            *[EMLPBlock(rin,rout) for rin,rout in zip(reps,reps[1:])],
+            *[EMLPBlock(rin, rout) for rin, rout in zip(reps, reps[1:])],
             torch.nn.Linear(reps[-1], self.rep_out)
         )
-
-
