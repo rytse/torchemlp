@@ -19,7 +19,7 @@ class MLP(nn.Module):
         dim_out: int,
         width: int,
         depth: int,
-        act: Callable = nn.Sigmoid,
+        act: Callable = nn.PReLU,
     ):
         """
         Args:

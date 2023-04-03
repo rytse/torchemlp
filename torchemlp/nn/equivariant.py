@@ -284,17 +284,18 @@ class EMLP(nn.Module):
         act_in = torch.eye(x.shape[-1], device=x.device).repeat(batch_size, 1, 1)
         act_out = torch.eye(self(x).shape[-1], device=x.device).repeat(batch_size, 1, 1)
 
-        if len(self.G.discrete_generators) > 0:
-            rho_gin = torch.stack([self.repin.rho_dense(g) for g in gs])
-            rho_gout = torch.stack([self.repout.rho_dense(g) for g in gs])
-            act_in = torch.bmm(rho_gin, act_in)
-            act_out = torch.bmm(rho_gout, act_out)
+        # if len(self.G.discrete_generators) > 0:
 
-        if len(self.G.lie_algebra) > 0:
-            drho_gin = torch.stack([self.repin.drho_dense(g) for g in gs])
-            drho_gout = torch.stack([self.repout.drho_dense(g) for g in gs])
-            act_in = torch.bmm(drho_gin, act_in)
-            act_out = torch.bmm(drho_gout, act_out)
+        rho_gin = torch.stack([self.repin.rho_dense(g) for g in gs])
+        rho_gout = torch.stack([self.repout.rho_dense(g) for g in gs])
+        act_in = torch.bmm(rho_gin, act_in)
+        act_out = torch.bmm(rho_gout, act_out)
+
+        # if len(self.G.lie_algebra) > 0:
+            # drho_gin = torch.stack([self.repin.drho_dense(g) for g in gs])
+            # drho_gout = torch.stack([self.repout.drho_dense(g) for g in gs])
+            # act_in = torch.bmm(drho_gin, act_in)
+            # act_out = torch.bmm(drho_gout, act_out)
 
         if torch.count_nonzero(act_in) > 0:
             y1 = self((act_in @ x[..., None])[..., 0])
