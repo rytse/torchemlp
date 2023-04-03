@@ -5,7 +5,7 @@ import torch.nn as nn
 
 import functorch
 
-from torchemlp.groups import Group, O
+from torchemlp.groups import Group, O, SO
 from torchemlp.reps import Rep, Vector, Scalar, T
 from torchemlp.utils import DEFAULT_DEVICE
 
@@ -155,3 +155,19 @@ class O5Synthetic(Dataset):
         stats = [Xmean, Xscale, Y.mean(dim=0), Y.std(dim=0)]
 
         super().__init__(dim, G, repin, repout, X, Y, stats)
+
+class Radius(Dataset):
+    def __init__(self, N=1024, device: torch.device = DEFAULT_DEVICE):
+        d = 3
+
+        repin = Vector
+        repout = Scalar
+        G = SO(d)
+
+        X = 100 * torch.randn(N, d, device=device)
+        Y = torch.norm(X, dim=1)
+        Y = Y[..., None]
+
+        stats = [X.mean(0), X.std(dim=0), Y.mean(dim=0), Y.std(dim=0)]
+
+        super().__init__(d, G, repin, repout, X, Y, stats)
