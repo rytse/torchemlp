@@ -3,6 +3,7 @@ from abc import ABC
 import random
 
 import torch
+import torch.nn as nn
 
 from torchemlp.ops import (
     LinearOperator,
@@ -23,7 +24,7 @@ GroupElem = torch.Tensor
 GroupElems = torch.Tensor
 
 
-class Group(ABC):
+class Group(nn.Module, ABC):
     """
     Abstract base class for groups
     """
