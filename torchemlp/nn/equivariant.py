@@ -324,5 +324,5 @@ class EMLPode(EMLP):
         reps = [self.rep_in] + middle_layers
         self.network = torch.nn.Sequential(
             *[EMLPBlock(rin, rout) for rin, rout in zip(reps, reps[1:])],
-            torch.nn.Linear(reps[-1], self.rep_out)
+            torch.nn.Linear(reps[-1], self.rep_out),
         )

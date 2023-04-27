@@ -3,7 +3,6 @@ import torch
 from tqdm import tqdm
 
 from torchemlp.ops import LinearOperator
-from torchemlp.utils import DEFAULT_DEVICE
 
 
 def orthogonal_complement(proj: torch.Tensor) -> torch.Tensor:
@@ -16,7 +15,7 @@ def orthogonal_complement(proj: torch.Tensor) -> torch.Tensor:
 
 
 def krylov_constraint_solve(
-    C: LinearOperator, tol: float = 1e-5, device: torch.device = DEFAULT_DEVICE
+    C: LinearOperator, device: torch.device, tol: float = 1e-5
 ) -> torch.Tensor:
     """
     Computes the solution basis Q for the linear constraint CQ = 0 and
@@ -40,7 +39,7 @@ def krylov_constraint_solve(
             )
             break
 
-        Q = krylov_constraint_solve_upto_r(C, r, tol)
+        Q = krylov_constraint_solve_upto_r(C, device, r, tol)
         found_rank = Q.shape[-1]
 
     return Q
@@ -48,12 +47,12 @@ def krylov_constraint_solve(
 
 def krylov_constraint_solve_upto_r(
     C: LinearOperator,
+    device: torch.device,
     r: int,
     tol: float = 1e-5,
     n_iters: int = 20_000,
     lr: float = 1e-2,
     momentum: float = 0.9,
-    device: torch.device = DEFAULT_DEVICE,
 ) -> torch.Tensor:
     """
     Iterative routine to compute the solution basis tot he constraint CQ = 0
@@ -112,7 +111,7 @@ def krylov_constraint_solve_upto_r(
                     "Constraint solving diverged even with small learning rate"
                 )
 
-            return krylov_constraint_solve_upto_r(C, r, tol, n_iters, lr / 3.0)
+            return krylov_constraint_solve_upto_r(C, device, r, tol, n_iters, lr / 3.0)
     else:
         raise Exception("Failed to converge.")
 
@@ -134,7 +133,7 @@ def krylov_constraint_solve_upto_r(
 
 
 def sparsify_basis(
-    Q: torch.Tensor, lr: float = 1e-2, device: torch.device = DEFAULT_DEVICE
+    Q: torch.Tensor, device: torch.device, lr: float = 1e-2
 ) -> torch.Tensor:
     """
     Attempt to sparsify a given basis by applying an orthogonal transformation
@@ -174,7 +173,7 @@ def sparsify_basis(
             print(
                 f"Basis sparsification diverged, trying lower learning rate {lr/3:.2e}"
             )
-            return sparsify_basis(Q, lr=lr / 3)
+            return sparsify_basis(Q, device, lr=lr / 3)
 
     # Decide what's a 0, +1, and -1
     Q = Q @ W.T
