@@ -70,3 +70,14 @@ def binom(n, k):
         n -= 1
 
     return int(b)
+
+
+def unpack_hsys(z: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+    D = z.shape[-1]
+    assert D % 2 == 0
+    d = D // 2
+
+    q = z[..., :d]
+    p = z[..., d:]
+
+    return q, p

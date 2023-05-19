@@ -1404,7 +1404,6 @@ def bilinear_weights(inrep: SumRep, outrep: Rep):
         REP_SIZES: list[int],
         W_MULT: list[int],
     ):
-
         W = torch.zeros((bs, W_alloc_size), device=device)
         for i, ((i_start, i_end), (w_start, w_end), n, rep_size, w_mult) in enumerate(
             zip(I_REGIONS, W_REGIONS, N, REP_SIZES, W_MULT)
