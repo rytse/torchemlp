@@ -207,8 +207,6 @@ class DynamicsDataset(Dataset):
 
         self.zs, self.ts = self.gen_trajs(n_traj, dt, T)
 
-        breakpoint()
-
         X = (self.zs[:, 0, ...], self.ts)
         Y = self.zs
 
@@ -225,8 +223,8 @@ class DynamicsDataset(Dataset):
     ) -> tuple[torch.Tensor, torch.Tensor]:
         z0 = self.sample_ics(n_traj)
         ts = torch.arange(0.0, T, dt, device=self.device)
-
-        return odeint(self.dynamics, z0.detach(), ts.detach()), ts
+        sol = torch.swapaxes(odeint(self.dynamics, z0.detach(), ts.detach()), 0, 1)
+        return sol, ts
 
     def __getitem__(self, i: int) -> tuple[tuple[torch.Tensor, ...], torch.Tensor]:
         return (self.zs[i, 0, ...], self.ts), self.zs[i, ...]

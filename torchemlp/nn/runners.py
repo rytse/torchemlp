@@ -6,6 +6,8 @@ import torch.nn as nn
 import torch.optim as optim
 import torch.nn.functional as F
 
+from torchdiffeq import odeint
+
 import pytorch_lightning as pl
 
 
@@ -54,16 +56,31 @@ class DynamicsL2RegressionLightning(RegressionLightning):
     def __init__(
         self,
         model: nn.Module,
-        odeint_fn: Callable,
+        autonomous: bool = True,
+        odeint_fn: Callable = odeint,
         lr: float = 3e-3,
         weight_decay: float = 0.0,
     ):
-        super(RegressionLightning, self).__init__(model, lr, weight_decay)
+        # super(RegressionLightning, self).__init__(model, lr, weight_decay)
+        super().__init__(model, lr, weight_decay)
         self.odeint_fn = odeint_fn
+        self.autonomous = autonomous
 
     def batch2loss(
         self, batch: tuple[tuple[torch.Tensor, torch.Tensor], torch.Tensor]
     ) -> torch.Tensor:
         (z0, ts), zs = batch
-        zs_pred = self.odeint_fn(self.model, z0, ts)
+
+        if self.autonomous:
+            zs_pred = self.odeint_fn(
+                lambda y0, _: self.model(y0),
+                z0,
+                ts[0, ...],
+                options={"dtype": torch.float32},
+            )
+        else:
+            zs_pred = self.odeint_fn(
+                self.model, z0, ts[0, ...], options={"dtype": torch.float32}
+            )
+
         return F.mse_loss(zs_pred, zs)
