@@ -32,7 +32,7 @@ class MLP(nn.Module):
         layers.append(act())
         for _ in range(depth):
             layers.append(nn.Linear(width, width))
-            layers.append(act)
+            layers.append(act())
         layers.append(nn.Linear(width, dim_out))
 
         self.network = nn.Sequential(*layers)
