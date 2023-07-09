@@ -223,7 +223,16 @@ class DynamicsDataset(Dataset):
     ) -> tuple[torch.Tensor, torch.Tensor]:
         z0 = self.sample_ics(n_traj)
         ts = torch.arange(0.0, T, dt, device=self.device)
-        sol = torch.swapaxes(odeint(self.dynamics, z0.detach(), ts.detach()), 0, 1)
+        sol = torch.swapaxes(
+            odeint(
+                self.dynamics,
+                z0.detach(),
+                ts.detach(),
+                options={"dtype": torch.float32},
+            ),
+            0,
+            1,
+        )
         return sol, ts
 
     def __getitem__(self, i: int) -> tuple[tuple[torch.Tensor, ...], torch.Tensor]:
@@ -235,16 +244,19 @@ class DoublePendulum(DynamicsDataset):
         self,
         n_traj: int,
         dt: float,
-        T: float,
+        dur: float,
         device: torch.device = DEFAULT_DEVICE,
     ):
         dynamics = lambda t, z: hamiltonian_dynamics(self.H, z, t, device)
         G = O2eR3()
-        base_rep = Vector(G)
-        repin = 4 * (base_rep**1 + base_rep.T**0)
-        repout = 4 * (base_rep**0 + base_rep.T**0)
+        # base_rep = Vector(G)
+        repin = 4 * T(1)
+        repout = 4 * T(1)
+        # repout= T(0)
+        # repin = 4 * (base_rep**1 + base_rep.T**0)
+        # repout = 4 * (base_rep**0 + base_rep.T**0)
         dim = 12
-        super().__init__(dynamics, n_traj, dt, T, dim, G, repin, repout, device)
+        super().__init__(dynamics, n_traj, dt, dur, dim, G, repin, repout, device)
 
     def H(self, z: torch.Tensor, t: torch.Tensor) -> torch.Tensor:
         g, m1, m2, k1, k2, l1, l2 = 1, 1, 1, 1, 1, 1, 1

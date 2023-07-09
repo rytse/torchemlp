@@ -1,9 +1,12 @@
 import matplotlib.pyplot as plt
 
 import torch
+import torch.backends
 
 
-DEFAULT_DEVICE = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
+# DEFAULT_DEVICE_STR = "cuda:0" if torch.cuda.is_available() else ("mps" if torch.backends.mps.is_available() else "cpu")
+DEFAULT_DEVICE_STR = "cuda:0" if torch.cuda.is_available() else "cpu"
+DEFAULT_DEVICE = torch.device(DEFAULT_DEVICE_STR)
 
 
 def merge_torch_types(dtype1, dtype2, device: torch.device = DEFAULT_DEVICE):

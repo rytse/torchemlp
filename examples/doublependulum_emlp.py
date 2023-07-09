@@ -7,6 +7,7 @@ import torch.utils as utils
 
 import pytorch_lightning as pl
 
+from torchemlp.utils import DEFAULT_DEVICE, DEFAULT_DEVICE_STR
 from torchemlp.groups import SO, O, S, Z
 from torchemlp.nn.equivariant import EMLP
 from torchemlp.nn.runners import (
@@ -16,7 +17,7 @@ from torchemlp.nn.runners import (
 from torchemlp.nn.utils import Standardize
 from torchemlp.datasets import DoublePendulum
 
-# torch.set_default_dtype(torch.float32)
+torch.set_default_dtype(torch.float32)
 
 TRAINING_SET_SIZE = 5_000
 VALIDATION_SET_SIZE = 1_000
@@ -61,13 +62,13 @@ test_loader = utils.data.DataLoader(
 
 model = Standardize(
     EMLP(dataset.repin, dataset.repout, dataset.G, N_CHANNELS, N_LAYERS), dataset.stats
-).cuda()
+).to(DEFAULT_DEVICE)
 plmodel = DynamicsL2RegressionLightning(model)
 
-breakpoint()
-
 trainer = pl.Trainer(
-    limit_train_batches=BATCH_SIZE, max_epochs=N_EPOCHS, accelerator="gpu"
+    limit_train_batches=BATCH_SIZE,
+    max_epochs=N_EPOCHS,
+    accelerator=DEFAULT_DEVICE_STR,
 )
 trainer.fit(plmodel, train_loader, val_loader)
 trainer.test(plmodel, test_loader)

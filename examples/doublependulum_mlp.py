@@ -7,6 +7,7 @@ import torch.utils as utils
 
 import pytorch_lightning as pl
 
+from torchemlp.utils import DEFAULT_DEVICE, DEFAULT_DEVICE_STR
 from torchemlp.groups import SO, O, S, Z
 from torchemlp.nn.utils import MLP
 from torchemlp.nn.runners import (
@@ -59,11 +60,13 @@ test_loader = utils.data.DataLoader(
     split_data[2], batch_size=BATCH_SIZE, num_workers=DL_WORKERS
 )
 
-model = Standardize(MLP(12, 12, 8, 4), dataset.stats).cuda()
+model = Standardize(MLP(12, 12, 8, 4), dataset.stats).to(DEFAULT_DEVICE)
 plmodel = DynamicsL2RegressionLightning(model)
 
 trainer = pl.Trainer(
-    limit_train_batches=BATCH_SIZE, max_epochs=N_EPOCHS, accelerator="gpu"
+    limit_train_batches=BATCH_SIZE,
+    max_epochs=N_EPOCHS,
+    accelerator=DEFAULT_DEVICE_STR,
 )
 trainer.fit(plmodel, train_loader, val_loader)
 trainer.test(plmodel, test_loader)

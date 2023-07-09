@@ -76,14 +76,14 @@ class DynamicsL2RegressionLightning(RegressionLightning):
                 lambda _, y0: self.model(y0),
                 z0,
                 ts[0, ...],
-                # options={"dtype": torch.float32},
+                options={"dtype": torch.float32},
             )
         else:
             zs_pred = self.odeint_fn(
                 self.model,
                 z0,
                 ts[0, ...],
-                # options={"dtype": torch.float32}
+                options={"dtype": torch.float32}
             )
         zs_pred = torch.swapaxes(zs_pred, 0, 1)
 
