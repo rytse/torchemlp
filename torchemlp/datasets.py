@@ -247,7 +247,7 @@ class DoublePendulum(DynamicsDataset):
         dur: float,
         device: torch.device = DEFAULT_DEVICE,
     ):
-        dynamics = lambda t, z: hamiltonian_dynamics(self.H, z, t, device)
+        dynamics = lambda t, z: hamiltonian_dynamics(self.H, z, t)
         G = O2eR3()
         # base_rep = Vector(G)
         repin = 4 * T(1)
@@ -258,7 +258,7 @@ class DoublePendulum(DynamicsDataset):
         dim = 12
         super().__init__(dynamics, n_traj, dt, dur, dim, G, repin, repout, device)
 
-    def H(self, z: torch.Tensor, t: torch.Tensor) -> torch.Tensor:
+    def H(self, _: torch.Tensor, z: torch.Tensor) -> torch.Tensor:
         g, m1, m2, k1, k2, l1, l2 = 1, 1, 1, 1, 1, 1, 1
 
         q, p = unpack_hsys(z)
@@ -275,7 +275,7 @@ class DoublePendulum(DynamicsDataset):
             + m2 * g * q2[..., 2]
         )
 
-        return torch.sum(ke + pe)
+        return ke + pe
 
     def sample_ics(self, bs: int) -> torch.Tensor:
         x1 = torch.tensor([0.0, 0.0, -1.5], device=self.device) + 0.2 * torch.randn(

@@ -1,39 +1,42 @@
 from typing import Callable
 
 import torch
+import torch.nn as nn
+from torch.autograd import grad
 import torch.autograd.functional as F
 
 from torchemlp.nn.equivariant import EMLP
 
 
-class EMLPH(EMLP):
-    def H(self, x: torch.Tensor):
-        return torch.sum(self.network(x))
+class Hamiltonian(nn.Module):
+    def __init__(self, H: nn.Module):
+        super().__init__()
+        self.H = H
 
-    def __call__(self, x: torch.Tensor):
-        return self.H(x)
+    def forward(self, t: torch.Tensor, z: torch.Tensor):
+        return hamiltonian_dynamics(self.H, z, t)
 
 
 def hamiltonian_dynamics(
-    H: Callable[[torch.Tensor, torch.Tensor], torch.Tensor],
+    H: nn.Module,
     z: torch.Tensor,
     t: torch.Tensor,
-    device: torch.device,
 ) -> torch.Tensor:
     """
     Given a nn.Module representing the Hamiltonian of a system, compute the
     dynamics function z' = J∇H(z)
     """
-
     d = z.shape[-1] // 2
-    J = torch.zeros((2 * d, 2 * d), device=device)
-    J[:d, d:] = torch.eye(d, device=device)
-    J[d:, :d] = -torch.eye(d, device=device)
+    J = torch.zeros((2 * d, 2 * d)).to(z)
+    J[:d, d:] = torch.eye(d)
+    J[d:, :d] = -torch.eye(d)
 
     z_in = z.clone().detach().requires_grad_(True)
     t_in = t.clone().detach().requires_grad_(True)
-    H_val = H(z_in, t_in)
-    H_val.backward()
-    H_grad = z_in.grad
 
-    return torch.mm(H_grad, J.t())
+    with torch.enable_grad():
+        H_val = H(t_in, z_in)
+
+    dHdz = grad(H_val, z_in, grad_outputs=torch.ones_like(H_val), create_graph=True)[0]
+
+    return torch.einsum("ij,bj->bi", J, dHdz)

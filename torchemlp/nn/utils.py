@@ -72,3 +72,17 @@ class Standardize(nn.Module):
         y = self.model(normalized_in)
         unnormalized_out = self.stdout * y + self.muout
         return unnormalized_out
+
+
+class AutonomousWrapper(nn.Module):
+    """
+    Convenience module for converting a module that is only a function of state
+    to a new module that has input args for state and time.
+    """
+
+    def __init__(self, model: nn.Module):
+        super(AutonomousWrapper, self).__init__()
+        self.model = model
+
+    def forward(self, _: torch.Tensor, z: torch.Tensor) -> torch.Tensor:
+        return self.model(z)
