@@ -14,7 +14,9 @@ class Hamiltonian(nn.Module):
         self.H = H
 
     def forward(self, t: torch.Tensor, z: torch.Tensor):
-        return hamiltonian_dynamics(self.H, z, t)
+        zp = hamiltonian_dynamics(self.H, z, t)
+        breakpoint()
+        return zp
 
 
 def hamiltonian_dynamics(
@@ -27,16 +29,36 @@ def hamiltonian_dynamics(
     dynamics function z' = J∇H(z)
     """
     d = z.shape[-1] // 2
+
     J = torch.zeros((2 * d, 2 * d)).to(z)
     J[:d, d:] = torch.eye(d)
     J[d:, :d] = -torch.eye(d)
-
-    z_in = z.clone().detach().requires_grad_(True)
-    t_in = t.clone().detach().requires_grad_(True)
+    J = J.requires_grad_(True)
 
     with torch.enable_grad():
-        H_val = H(t_in, z_in)
+        H_val = H(t, z)
 
-    dHdz = grad(H_val, z_in, grad_outputs=torch.ones_like(H_val), create_graph=True)[0]
+    dHdz = grad(
+        H_val,
+        z,
+        grad_outputs=torch.ones_like(H_val),
+        create_graph=True,
+        retain_graph=True,
+    )[0]
 
-    return torch.einsum("ij,bj->bi", J, dHdz)
+    # zp = torch.cat((-dHdz[:, d:], dHdz[:, :d]), dim=1)
+    # zp = torch.matmul(dHdz.unsqueeze(1), J.T).squeeze(1)
+
+    zp = torch.matmul(dHdz, J.t())
+
+    # if z.shape[0] == 500:
+    # breakpoint()
+
+    return zp
+
+
+def hamiltonian_dynamics_nograd(H: nn.Module, z: torch.Tensor, t: torch.Tensor):
+    print("hamiltonian_dynamics_nograd")
+    z = z.requires_grad_(True)
+    t = t.requires_grad_(True)
+    return hamiltonian_dynamics(H, z, t).detach()
