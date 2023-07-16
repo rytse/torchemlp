@@ -75,17 +75,12 @@ class DynamicsL2RegressionLightning(RegressionLightning):
         zs = zs.requires_grad_(True)
         ts = ts.requires_grad_(True)
 
-        breakpoint()
-
         zs_pred = self.odeint_fn(
             self.model,
             z0,
             ts[0, ...],
             options={"dtype": torch.float32},
         )
-        breakpoint()
         zs_pred = torch.swapaxes(zs_pred, 0, 1)
-
-        breakpoint()
 
         return F.mse_loss(zs_pred, zs)

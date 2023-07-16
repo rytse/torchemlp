@@ -9,7 +9,7 @@ import functorch
 from torchemlp.groups import Z, Group, O, SO, O2eR3
 from torchemlp.reps import Rep, Vector, Scalar, T
 from torchemlp.utils import DEFAULT_DEVICE, unpack_hsys
-from torchemlp.nn.contdepth import hamiltonian_dynamics_nograd
+from torchemlp.nn.contdepth import hamiltonian_dynamics
 
 from torchdiffeq import odeint
 
@@ -247,7 +247,7 @@ class DoublePendulum(DynamicsDataset):
         dur: float,
         device: torch.device = DEFAULT_DEVICE,
     ):
-        dynamics = lambda t, z: hamiltonian_dynamics_nograd(self.H, z, t)
+        dynamics = lambda t, z: hamiltonian_dynamics(self.H, z, t)
         G = O2eR3()
         # base_rep = Vector(G)
         repin = 4 * T(1)

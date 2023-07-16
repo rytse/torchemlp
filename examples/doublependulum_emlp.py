@@ -8,10 +8,9 @@ import torch.utils as utils
 import pytorch_lightning as pl
 
 from torchemlp.utils import DEFAULT_DEVICE, DEFAULT_DEVICE_STR
-from torchemlp.groups import SO, O, S, Z
 from torchemlp.reps import Scalar
 from torchemlp.nn.utils import AutonomousWrapper
-from torchemlp.nn.contdepth import hamiltonian_dynamics, Hamiltonian
+from torchemlp.nn.contdepth import Hamiltonian
 from torchemlp.nn.equivariant import EMLP
 from torchemlp.nn.runners import DynamicsL2RegressionLightning
 from torchemlp.nn.utils import Standardize

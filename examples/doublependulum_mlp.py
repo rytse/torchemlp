@@ -8,12 +8,9 @@ import torch.utils as utils
 import pytorch_lightning as pl
 
 from torchemlp.utils import DEFAULT_DEVICE, DEFAULT_DEVICE_STR
-from torchemlp.groups import SO, O, S, Z
 from torchemlp.nn.utils import MLP, AutonomousWrapper
-from torchemlp.nn.runners import (
-    FuncMSERegressionLightning,
-    DynamicsL2RegressionLightning,
-)
+from torchemlp.nn.contdepth import Hamiltonian
+from torchemlp.nn.runners import DynamicsL2RegressionLightning
 from torchemlp.nn.utils import Standardize
 from torchemlp.datasets import DoublePendulum
 
@@ -60,9 +57,10 @@ test_loader = utils.data.DataLoader(
     split_data[2], batch_size=BATCH_SIZE, num_workers=DL_WORKERS
 )
 
-model = AutonomousWrapper(
-    Standardize(MLP(12, 12, 8, 4), dataset.stats).to(DEFAULT_DEVICE)
-)
+model = Hamiltonian(
+    AutonomousWrapper(Standardize(MLP(12, 1, 8, 4), dataset.stats))
+).to(DEFAULT_DEVICE)
+
 plmodel = DynamicsL2RegressionLightning(model)
 
 trainer = pl.Trainer(
