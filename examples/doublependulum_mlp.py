@@ -4,6 +4,7 @@ sys.path.append("../")
 
 import torch
 import torch.utils as utils
+from torch.profiler import profile, record_function, ProfilerActivity
 
 import pytorch_lightning as pl
 
@@ -25,7 +26,7 @@ T = 30.0
 
 BATCH_SIZE = 500
 
-N_EPOCHS = 5  # min(int(900_000 / TRAINING_SET_SIZE), 1000)
+N_EPOCHS = 1  # min(int(900_000 / TRAINING_SET_SIZE), 1000)
 # N_EPOCHS = 100  # min(int(900_000 / TRAINING_SET_SIZE), 1000)
 
 N_CHANNELS = 384
@@ -58,7 +59,7 @@ test_loader = utils.data.DataLoader(
 )
 
 model = Hamiltonian(
-    AutonomousWrapper(Standardize(MLP(12, 1, 8, 4), dataset.stats))
+    AutonomousWrapper(Standardize(MLP(12, 1, 2, 2), dataset.stats))
 ).to(DEFAULT_DEVICE)
 
 plmodel = DynamicsL2RegressionLightning(model)
@@ -68,5 +69,12 @@ trainer = pl.Trainer(
     max_epochs=N_EPOCHS,
     accelerator=DEFAULT_DEVICE_STR,
 )
-trainer.fit(plmodel, train_loader, val_loader)
+
+with profile(activities=[ProfilerActivity.CPU, ProfilerActivity.CUDA], record_shapes=True, profile_memory=True, use_cuda=True) as prof:
+    with record_function("model_train"):
+        trainer.fit(plmodel, train_loader, val_loader)
+
+print(prof.key_averages().table(sort_by="self_cpu_memory_usage", row_limit=10))
+prof.export_chrome_trace("trace.json")
+
 trainer.test(plmodel, test_loader)

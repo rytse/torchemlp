@@ -6,7 +6,7 @@ import torch.nn as nn
 import torch.optim as optim
 import torch.nn.functional as F
 
-from torchdiffeq import odeint
+from torchdiffeq import odeint_adjoint as odeint
 
 from torchemlp.nn.contdepth import hamiltonian_dynamics
 
