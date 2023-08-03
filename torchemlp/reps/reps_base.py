@@ -1295,15 +1295,12 @@ def T(p: int, q: int = 0, G: Optional[Group] = None) -> Rep:
     return V**p * V.T**q
 
 
-def bilinear_weights(inrep: SumRep, outrep: Rep):
+def bilinear_params(inrep: SumRep, outrep: Rep):
     """
-    Compute the bilinear weights for a given input and output representation.
+    Compute the parameters of a bilinear layer mapping from a given input and output representation.
     """
     device = inrep.device
 
-    # TODO this has a lot of work to be done to make it more efficient.
-    # TODO refactor to "KLinear"
-    # TODO replace with LazyDirectSum
     W_rep, W_perm = (inrep >> outrep).canonicalize()
     W_invperm = torch.argsort(W_perm)
     W_shape = (outrep.size, inrep.size)
@@ -1336,116 +1333,22 @@ def bilinear_weights(inrep: SumRep, outrep: Rep):
         )
         reduced_indices_dict[rep] = ids[rand_indices].reshape(-1)
 
-    W_alloc_size = sum([w_mult * rep.size for rep, w_mult in W_mults.items()])
+    i = 0
+    ns = []
+    bids = []
+    x_mults = []
+    for rep, W_mult in W_mults.items():
+        if rep not in x_mults:
+            continue
 
-    def helper():
-        I_REGIONS: list[tuple[int, int]] = []
-        W_REGIONS: list[tuple[int, int]] = []
-        N: list[int] = []
-        BIDS: list[torch.Tensor] = []
-        W_MULT: list[int] = []
-        REP_SIZES: list[int] = []
+        n = nelems(x_mult, rep)
+        bid = reduced_indices_dict[rep]
+        x_mult = x_mults[rep]
 
-        start_index = 0
-        i = 0
-        for rep, W_mult in W_mults.items():
-            local_w_size = W_mult * rep.size
-            if rep not in x_mults:
-                start_index += local_w_size
-                continue
-            n = nelems(x_mults[rep], rep)
-            N.append(n)
+        ns.append(n)
+        bids.append(bid)
+        x_mults.append(x_mult)
 
-            i_end = i + W_mult * n
-            I_REGIONS.append((i, i_end))
-            i = i_end
+        i += W_mult * n
 
-            bids = reduced_indices_dict[rep]
-            BIDS.append(bids)
-            W_REGIONS.append((start_index, start_index + local_w_size))
-            W_MULT.append(W_mult)
-            REP_SIZES.append(rep.size)
-            start_index += local_w_size
-
-        return I_REGIONS, W_REGIONS, N, BIDS, W_MULT, REP_SIZES
-
-    I_REGIONS, W_REGIONS, N, BIDS, W_MULT, REP_SIZES = helper()
-
-    def lazy_proj_fast(params: torch.Tensor, x: torch.Tensor):
-        assert len(params.shape) <= 1
-        assert len(x.shape) == 2
-        bshape = x.shape[:-1]
-        x = x.reshape(-1, x.shape[-1])
-        bs = x.shape[0]
-        x_binned = [x[..., bids] for bids in BIDS]
-        return lazy_proj_jit(
-            params,
-            x_binned,
-            bs,
-            W_alloc_size,
-            device,
-            I_REGIONS,
-            W_REGIONS,
-            N,
-            REP_SIZES,
-            W_MULT,
-        )[..., W_invperm].reshape(*bshape, *W_shape)
-
-    @torch.jit.script
-    def lazy_proj_jit(
-        params: torch.Tensor,
-        x_binned: list[torch.Tensor],
-        bs: int,
-        W_alloc_size: int,
-        device: torch.device,
-        I_REGIONS: list[tuple[int, int]],
-        W_REGIONS: list[tuple[int, int]],
-        N: list[int],
-        REP_SIZES: list[int],
-        W_MULT: list[int],
-    ):
-
-        W = torch.zeros((bs, W_alloc_size), device=device)
-        for i, ((i_start, i_end), (w_start, w_end), n, rep_size, w_mult) in enumerate(
-            zip(I_REGIONS, W_REGIONS, N, REP_SIZES, W_MULT)
-        ):
-            bilinear_params = params[i_start:i_end].reshape(w_mult, n)
-            W[:, w_start:w_end] = (
-                (bilinear_params @ x_binned[i].T.reshape(n, rep_size * bs))
-                .reshape(w_mult * rep_size, bs)
-                .T
-            )
-        return W
-
-    # TODO jit
-    def lazy_proj(params: torch.Tensor, x: torch.Tensor):
-        assert len(params.shape) <= 1
-        bshape = x.shape[:-1]
-        x = x.reshape(-1, x.shape[-1])
-        bs = x.shape[0]
-
-        i = 0
-        Ws = []
-
-        for rep, W_mult in W_mults.items():
-            if rep not in x_mults:
-                Ws.append(torch.zeros((bs, W_mult * rep.size), device=device))
-                continue
-
-            x_mult = x_mults[rep]
-            n = nelems(x_mult, rep)
-            i_end = i + W_mult * n
-            bids = reduced_indices_dict[rep]
-
-            bilinear_params = params[i:i_end].reshape(W_mult, n)
-            i = i_end
-
-            bilinear_elems = bilinear_params @ x[..., bids].T.reshape(n, rep.size * bs)
-            bilinear_elems = bilinear_elems.reshape(W_mult * rep.size, bs).T
-
-            Ws.append(bilinear_elems)
-
-        Ws = torch.cat(Ws, dim=-1)
-        return Ws[..., W_invperm].reshape(*bshape, *W_shape)
-
-    return active_dims, lazy_proj_fast
+    return ns, bids, x_mults, W_mults, W_invperm
