@@ -1,4 +1,7 @@
+.vscode
+
 examples/lightning_logs/
+lightning_logs/
 
 tags
 
