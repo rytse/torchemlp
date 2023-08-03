@@ -59,7 +59,7 @@ class EquivariantBiLinear(nn.Module):
             self.W_mults,
             self.W_invperm,
         ) = bilinear_params(repin, repout)
-        
+
         self.Ws = [
             torch.normal(
                 torch.zeros(
