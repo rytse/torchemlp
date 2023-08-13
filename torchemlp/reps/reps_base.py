@@ -807,7 +807,9 @@ def rep_permutation(
     """
     size_cumsums = []
     for repsizes in repsizes_all:
-        padded_sizes = torch.tensor([0] + [size for size in repsizes], device=device)
+        padded_sizes = torch.tensor(
+            [0] + [size for size in repsizes], dtype=torch.int32, device=device
+        )  # TODO check dtype necessary
         size_cumsums.append(torch.cumsum(padded_sizes, 0))
     permutation = torch.zeros(
         [cumsum[-1] for cumsum in size_cumsums], dtype=torch.int, device=device

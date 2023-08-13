@@ -2,10 +2,6 @@ from typing import Callable
 
 import torch
 import torch.nn as nn
-import torch.optim as optim
-import torch.nn.functional as F
-
-import pytorch_lightning as pl
 
 
 class MLP(nn.Module):
@@ -36,7 +32,7 @@ class MLP(nn.Module):
         layers.append(act())
         for _ in range(depth):
             layers.append(nn.Linear(width, width))
-            layers.append(act)
+            layers.append(act())
         layers.append(nn.Linear(width, dim_out))
 
         self.network = nn.Sequential(*layers)
@@ -78,35 +74,15 @@ class Standardize(nn.Module):
         return unnormalized_out
 
 
-class RegressionLightning(pl.LightningModule):
-    def __init__(self, model, lr=3e-3, weight_decay=0.0):
-        super().__init__()
+class AutonomousWrapper(nn.Module):
+    """
+    Convenience module for converting a module that is only a function of state
+    to a new module that has input args for state and time.
+    """
+
+    def __init__(self, model: nn.Module):
+        super(AutonomousWrapper, self).__init__()
         self.model = model
-        self.lr = lr
-        self.weight_decay = weight_decay
 
-    def training_step(self, batch, batch_idx):
-        x, y = batch
-        y_pred = self.model(x)
-        loss = F.mse_loss(y_pred, y)
-        self.log("train_loss", loss)
-
-        return loss
-
-    def test_step(self, batch, batch_idx):
-        x, y = batch
-        y_pred = self.model(x)
-        loss = F.mse_loss(y_pred, y)
-        self.log("test_loss", loss.item())
-
-    def validation_step(self, batch, batch_idx):
-        x, y = batch
-        y_pred = self.model(x)
-        loss = F.mse_loss(y_pred, y)
-        self.log("val_loss", loss)
-
-    def configure_optimizers(self):
-        optimizer = optim.Adam(
-            self.parameters(), lr=self.lr, weight_decay=self.weight_decay
-        )
-        return optimizer
+    def forward(self, _: torch.Tensor, z: torch.Tensor) -> torch.Tensor:
+        return self.model(z)

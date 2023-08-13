@@ -1,13 +1,17 @@
 from abc import ABC, abstractmethod
+from typing import Callable
 
 import torch
 import torch.nn as nn
 
 import functorch
 
-from torchemlp.groups import Group, O, SO
+from torchemlp.groups import Group, O, SO, O2eR3
 from torchemlp.reps import Rep, Vector, Scalar, T
-from torchemlp.utils import DEFAULT_DEVICE
+from torchemlp.utils import DEFAULT_DEVICE, unpack_hsys
+from torchemlp.nn.contdepth import hamiltonian_dynamics
+
+from torchdiffeq import odeint
 
 
 class GroupAugmentation(nn.Module):
@@ -46,8 +50,8 @@ class Dataset(ABC):
         G: Group,
         repin: Rep,
         repout: Rep,
-        X: torch.Tensor,
-        Y: torch.Tensor,
+        X: torch.Tensor | tuple[torch.Tensor, ...],
+        Y: torch.Tensor | tuple[torch.Tensor, ...],
         stats: list[float],
     ):
         self.G = G
@@ -58,11 +62,22 @@ class Dataset(ABC):
         self.Y = Y
         self.stats = stats
 
-    def __getitem__(self, i):
+    def __getitem__(
+        self, i
+    ) -> (
+        tuple[torch.Tensor, torch.Tensor]
+        | tuple[tuple[torch.Tensor, ...], torch.Tensor]
+        | tuple[torch.Tensor, tuple[torch.Tensor, ...]]
+        | tuple[tuple[torch.Tensor, ...], tuple[torch.Tensor, ...]]
+    ):
         return (self.X[i], self.Y[i])
 
     def __len__(self):
-        return self.X.shape[0]
+        match self.X:
+            case torch.Tensor():
+                return self.X.shape[0]
+            case tuple():
+                return self.X[0].shape[0]  # TODO check if correct lol
 
     def default_aug(self, model):
         return GroupAugmentation(model, self.repin, self.repout, self.G)
@@ -172,3 +187,102 @@ class Radius(Dataset):
         stats = [X.mean(0), X.std(dim=0), Y.mean(dim=0), Y.std(dim=0)]
 
         super().__init__(d, G, repin, repout, X, Y, stats)
+
+
+class DynamicsDataset(Dataset):
+    def __init__(
+        self,
+        dynamics: Callable[[torch.Tensor, torch.Tensor], torch.Tensor],
+        n_traj: int,
+        dt: float,
+        T: float,
+        dim: int,
+        G: Group,
+        repin: Rep,
+        repout: Rep,
+        device: torch.device = DEFAULT_DEVICE,
+    ):
+        self.dynamics = dynamics
+        self.device = device
+
+        self.zs, self.ts = self.gen_trajs(n_traj, dt, T)
+
+        X = (self.zs[:, 0, ...], self.ts)
+        Y = self.zs
+
+        stats = [0.0, 1.0, 0.0, 1.0]
+
+        super().__init__(dim, G, repin, repout, X, Y, stats)
+
+    @abstractmethod
+    def sample_ics(self, n_traj: int):
+        raise NotImplementedError
+
+    def gen_trajs(
+        self, n_traj: int, dt: float, T: float
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        z0 = self.sample_ics(n_traj)
+        ts = torch.arange(0.0, T, dt, device=self.device)
+        sol = torch.swapaxes(
+            odeint(
+                self.dynamics,
+                z0,
+                ts,
+                options={"dtype": torch.float32},
+            ),
+            0,
+            1,
+        ).detach()
+        return sol, ts
+
+    def __getitem__(self, i: int) -> tuple[tuple[torch.Tensor, ...], torch.Tensor]:
+        return (self.zs[i, 0, ...], self.ts), self.zs[i, ...]
+
+
+class DoublePendulum(DynamicsDataset):
+    def __init__(
+        self,
+        n_traj: int,
+        dt: float,
+        dur: float,
+        device: torch.device = DEFAULT_DEVICE,
+    ):
+        dynamics = lambda t, z: hamiltonian_dynamics(self.H, z, t)
+        G = O2eR3()
+        # base_rep = Vector(G)
+        repin = 4 * T(1)
+        repout = 4 * T(1)
+        # repout= T(0)
+        # repin = 4 * (base_rep**1 + base_rep.T**0)
+        # repout = 4 * (base_rep**0 + base_rep.T**0)
+        dim = 12
+        super().__init__(dynamics, n_traj, dt, dur, dim, G, repin, repout, device)
+
+    def H(self, _: torch.Tensor, z: torch.Tensor) -> torch.Tensor:
+        g, m1, m2, k1, k2, l1, l2 = 1, 1, 1, 1, 1, 1, 1
+
+        q, p = unpack_hsys(z)
+        q1, q2 = unpack_hsys(q)
+        p1, p2 = unpack_hsys(p)
+
+        ke = 1.0 / (2.0 * m1) * torch.square(torch.norm(p1, dim=-1)) + 1.0 / (
+            2.0 * m2
+        ) * torch.square(torch.norm(p2, dim=-1))
+        pe = (
+            k1 / 2.0 * torch.square(torch.norm(q1, dim=-1) - l1)
+            + k2 * torch.square(torch.norm(q1 - q2, dim=-1) - l2)
+            + m1 * g * q1[..., 2]
+            + m2 * g * q2[..., 2]
+        )
+
+        return ke + pe
+
+    def sample_ics(self, bs: int) -> torch.Tensor:
+        x1 = torch.tensor([0.0, 0.0, -1.5], device=self.device) + 0.2 * torch.randn(
+            bs, 3, device=self.device
+        )
+        x2 = torch.tensor([0.0, 0.0, -3.0], device=self.device) + 0.2 * torch.randn(
+            bs, 3, device=self.device
+        )
+        p = 0.4 * torch.randn(bs, 6, device=self.device)
+        return torch.cat([x1, x2, p], dim=1)

@@ -1,9 +1,11 @@
 import matplotlib.pyplot as plt
 
 import torch
+import torch.backends  # TODO necessary?
 
 
-DEFAULT_DEVICE = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
+DEFAULT_DEVICE_STR = "cuda" if torch.cuda.is_available() else "cpu"
+DEFAULT_DEVICE = torch.device(DEFAULT_DEVICE_STR)
 
 
 def merge_torch_types(dtype1, dtype2, device: torch.device = DEFAULT_DEVICE):
@@ -70,3 +72,14 @@ def binom(n, k):
         n -= 1
 
     return int(b)
+
+
+def unpack_hsys(z: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+    D = z.shape[-1]
+    assert D % 2 == 0
+    d = D // 2
+
+    q = z[..., :d]
+    p = z[..., d:]
+
+    return q, p
