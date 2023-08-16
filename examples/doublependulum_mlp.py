@@ -59,12 +59,26 @@ model = Hamiltonian(AutonomousWrapper(Standardize(MLP(12, 1, 2, 2), dataset.stat
     DEFAULT_DEVICE
 )
 
-plmodel = DynamicsL2RegressionLightning(model)
+t = torch.tensor(0.0).to(DEFAULT_DEVICE)
+t.requires_grad_()
+z = torch.randn(1, 12).to(DEFAULT_DEVICE)
+z.requires_grad_()
 
-trainer = pl.Trainer(
-    limit_train_batches=BATCH_SIZE,
-    max_epochs=N_EPOCHS,
-    accelerator=DEFAULT_DEVICE_STR,
-)
+foo = model(t, z)
+print(foo)
+bar = foo.sum()
+print(bar)
+bar.backward()
+print(t.grad)
+print(z.grad)
 
-trainer.fit(plmodel, train_loader, val_loader)
+
+# plmodel = DynamicsL2RegressionLightning(model)
+
+# trainer = pl.Trainer(
+    # limit_train_batches=BATCH_SIZE,
+    # max_epochs=N_EPOCHS,
+    # accelerator=DEFAULT_DEVICE_STR,
+# )
+
+# trainer.fit(plmodel, train_loader, val_loader)
