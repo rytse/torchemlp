@@ -1303,7 +1303,6 @@ def bilinear_params(inrep: SumRep, outrep: Rep):
 
     W_rep, W_perm = (inrep >> outrep).canonicalize()
     W_invperm = torch.argsort(W_perm)
-    W_shape = (outrep.size, inrep.size)
 
     # Make sure W is an OpRep that we can direct sum over
     match W_rep:
@@ -1314,41 +1313,45 @@ def bilinear_params(inrep: SumRep, outrep: Rep):
                 "Input rep map is not a direct sum, can't compute bilinear weights"
             )
 
-    W_mults = W_rep.counters
-    x_mults = inrep.counters
-    x_mults = {rep: c for rep, c in x_mults.items() if not isinstance(rep, ScalarRep)}
-
-    def nelems(nx: int, rep: Rep):
-        return min(nx, rep.size)
-
-    active_dims = sum(
-        [W_mults.get(rep, 0) * nelems(n, rep) for rep, n in x_mults.items()]
-    )
-
+    # Randomly shuffle the position of each input rep index in the bilinear layer
     inrep_dict = inrep.as_dict(torch.arange(inrep.size, device=device))
     reduced_indices_dict: dict[Rep, torch.Tensor] = {}
     for rep, ids in inrep_dict.items():
         rand_indices = torch.randint(
-            low=0, high=len(ids), size=(nelems(len(ids), rep),), device=device
+            low=0, high=len(ids), size=(min(len(ids), rep.size),), device=device
         )
         reduced_indices_dict[rep] = ids[rand_indices].reshape(-1)
 
-    i = 0
+    # Save the slices of the input that correspond to non-scalar reps
+    x_mults = {
+        rep: c for rep, c in inrep.counters.items() if not isinstance(rep, ScalarRep)
+    }
+    W_idx = 0
+    reps_used = []
     ns = []
     bids = []
-    x_mults = []
-    for rep, W_mult in W_mults.items():
-        if rep not in x_mults:
-            continue
+    W_mults_used = []
+    W_idxs_used = []
+    slices = []
 
-        n = nelems(x_mult, rep)
-        bid = reduced_indices_dict[rep]
-        x_mult = x_mults[rep]
+    i = 0
+    for rep, W_mult in W_rep.counters.items():
+        W_idx_next = W_idx + W_mult * rep.size
+        i_end = i + W_mult * rep.size
 
-        ns.append(n)
-        bids.append(bid)
-        x_mults.append(x_mult)
+        if rep in x_mults:
+            x_mult = x_mults[rep]
+            n = min(x_mult, rep.size)
+            bid = reduced_indices_dict[rep]
 
-        i += W_mult * n
+            reps_used.append(rep)
+            ns.append(n)
+            bids.append(bid)
+            W_mults_used.append(W_mult)
+            W_idxs_used.append(torch.arange(W_idx, W_idx_next, device=device))
+            slices.append(slice(i, i_end))
 
-    return ns, bids, x_mults, W_mults, W_invperm
+        W_idx = W_idx_next
+        i = i_end
+
+    return reps_used, ns, bids, slices, W_mults_used, W_invperm
