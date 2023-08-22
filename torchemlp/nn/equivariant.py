@@ -6,8 +6,6 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-import functorch
-
 from torchemlp.utils import lambertW, binom, rel_rms_diff
 from torchemlp.groups import Group
 from torchemlp.reps import Rep, T, SumRep, Scalar, ScalarRep, Zero, bilinear_params
@@ -49,57 +47,47 @@ class EquivariantBiLinear(nn.Module):
 
     def __init__(self, repin: SumRep, repout: Rep):
         super(EquivariantBiLinear, self).__init__()
-        self.repin = repin
-        self.repout = repout
+        self.repin_size = repin.size
+        self.repout_size = repout.size
 
         (
+            self.reps,
             self.ns,
             self.bids,
-            self.x_mults,
+            self.slices,
             self.W_mults,
             self.W_invperm,
         ) = bilinear_params(repin, repout)
 
-        self.Ws = [
-            torch.normal(
-                torch.zeros(
-                    (W_mult, n),
-                ),
-                torch.ones(
-                    (W_mult, n),
-                ),
-            )
-            for W_mult, n in zip(self.W_mults, self.ns)
-        ]
+        self.Ws = nn.ParameterList(
+            [
+                torch.normal(torch.zeros((n * W_mult,)))
+                for n, W_mult in zip(self.ns, self.W_mults)
+            ]
+        )
+        self.rep_sizes = [rep.size for rep in self.reps]
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        batch_size = x.shape[0]
-        total_out_dim = sum(W_mult * rep.size for rep, W_mult in self.W_mults.items())
-        W_proj = torch.zeros(batch_size, total_out_dim, device=x.device)
+        bshape = x.shape[:-1]
+        x_flat = x.reshape(-1, x.shape[-1])
+        batch_size = x_flat.shape[0]
+        x_dim = x_flat.shape[-1]
 
-        slice_indices = torch.cumsum(
-            torch.tensor(
-                [0] + [W_mult * rep.size for rep, W_mult in self.W_mults.items()]
-            ),
-            dim=0,
-        )
+        W_proj = torch.zeros(batch_size, x_dim**2, device=x.device)
 
-        for i, (rep, W_mult) in enumerate(self.W_mults.items()):
-            if rep not in self.x_mults:
-                continue
-
-            x_rep = x.reshape(-1, x.shape[-1])[..., self.bids[i]]
-            bilinear_out = self.Ws[i] @ x_rep.T.reshape(
-                self.ns[i], rep.size * batch_size
+        for n, bid, W, sl, rep_size, W_mult in zip(
+            self.ns, self.bids, self.Ws, self.slices, self.rep_sizes, self.W_mults
+        ):
+            x_rep = torch.index_select(x_flat, 1, bid).T.reshape(
+                n, rep_size * batch_size
             )
-            W_proj[:, slice_indices[i] : slice_indices[i + 1]] = bilinear_out.T.reshape(
-                batch_size, -1
-            )
+            x_proj = W.reshape(W_mult, n) @ x_rep
+            W_proj[:, sl] = x_proj.reshape(W_mult * rep_size, batch_size).T
 
-        W_proj = W_proj[..., self.W_invperm].reshape(
-            *x.shape[:-1], self.repout.size, self.repin.size
+        W_proj_permed = torch.index_select(W_proj, 1, self.W_invperm).reshape(
+            *bshape, self.repout_size, self.repin_size
         )
-        return 0.1 * (W_proj @ x[..., None])[..., 0]
+        return 0.1 * (W_proj_permed @ x[..., None])[..., 0]
 
 
 class GatedNonlinearity(nn.Module):
@@ -242,7 +230,8 @@ class EMLP(nn.Module):
         self.network = nn.Sequential(*layers)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        return self.network(x)
+        emlp_out = self.network(x)
+        return emlp_out
 
     @staticmethod
     def uniform_rep(ch: int, G: Group) -> Rep:
@@ -360,5 +349,5 @@ class EMLPode(EMLP):
         reps = [self.rep_in] + middle_layers
         self.network = torch.nn.Sequential(
             *[EMLPBlock(rin, rout) for rin, rout in zip(reps, reps[1:])],
-            torch.nn.Linear(reps[-1], self.rep_out),
+            torch.nn.Linear(reps[-1].size, self.rep_out.size),
         )
