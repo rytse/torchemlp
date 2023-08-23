@@ -14,12 +14,7 @@ class MLP(nn.Module):
     """
 
     def __init__(
-        self,
-        dim_in: int,
-        dim_out: int,
-        width: int,
-        depth: int,
-        act: Callable = nn.PReLU,
+        self, dim_in: int, dim_out: int, width: int, depth: int, act: Callable = nn.SiLU
     ):
         """
         Args:
@@ -30,16 +25,17 @@ class MLP(nn.Module):
             act: activation function
         """
         super().__init__()
+        self.act = act
 
-        layers = []
-        layers.append(nn.Linear(dim_in, width))
-        layers.append(act())
+        self.layers = []
+        self.layers.append(nn.Linear(dim_in, width, bias=False))
+        self.layers.append(self.act())
         for _ in range(depth):
-            layers.append(nn.Linear(width, width))
-            layers.append(act)
-        layers.append(nn.Linear(width, dim_out))
+            self.layers.append(nn.Linear(width, width, bias=False))
+            self.layers.append(self.act())
+        self.layers.append(nn.Linear(width, dim_out, bias=False))
 
-        self.network = nn.Sequential(*layers)
+        self.network = nn.Sequential(*self.layers)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         return self.network(x)
