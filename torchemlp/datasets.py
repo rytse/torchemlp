@@ -1,9 +1,9 @@
-from abc import ABC, abstractmethod
+from abc import ABC
 
 import torch
 import torch.nn as nn
-
-import functorch
+from torch.utils.data import Dataset
+from functorch import vmap  # type: ignore
 
 from torchemlp.groups import Group, O, SO
 from torchemlp.reps import Rep, Vector, Scalar, T
@@ -22,8 +22,8 @@ class GroupAugmentation(nn.Module):
         self.repout = repout
         self.G = G
 
-        self.rho_in = functorch.vmap(self.repin.rho)
-        self.rho_out = functorch.vmap(self.repout.rho)
+        self.rho_in = vmap(self.repin.rho)
+        self.rho_out = vmap(self.repout.rho)
 
     def forward(self, x, training=True):
         if training:
@@ -35,7 +35,7 @@ class GroupAugmentation(nn.Module):
         return self.network(x, training)
 
 
-class Dataset(ABC):
+class SymDataset(Dataset, ABC):
     """
     Abstract class for a dataset.
     """
@@ -68,7 +68,7 @@ class Dataset(ABC):
         return GroupAugmentation(model, self.repin, self.repout, self.G)
 
 
-class Inertia(Dataset):
+class Inertia(SymDataset):
     """
     Euler equations for inertial rotations
 
@@ -117,7 +117,7 @@ class Inertia(Dataset):
         super().__init__(dim, G, repin, repout, X, Y, stats)
 
 
-class O5Synthetic(Dataset):
+class O5Synthetic(SymDataset):
     """
     Dataset representing trajectories of
 
@@ -157,7 +157,7 @@ class O5Synthetic(Dataset):
         super().__init__(dim, G, repin, repout, X, Y, stats)
 
 
-class Radius(Dataset):
+class Radius(SymDataset):
     def __init__(self, N=1024, device: torch.device = DEFAULT_DEVICE):
         d = 3
 

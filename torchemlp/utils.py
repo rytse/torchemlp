@@ -59,7 +59,7 @@ def lambertW(ch: int, d: int) -> int:
     return max_rank - 1
 
 
-def binom(n, k):
+def binom(n: int, k: int) -> int:
     if not 0 <= k <= n:
         return 0
 

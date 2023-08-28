@@ -6,17 +6,12 @@ import itertools
 
 import torch
 
-# from torchemlp.utils import (
-# MatElem,
-# MatElem,
-# MatElem,
-# )
-
 from torchemlp.groups import Group
 from torchemlp.ops import (
     lazy_direct_matmat,
     product,
     LinearOperator,
+    InvertibleLinearOperator,
     ZeroOperator,
     I,
     LazyKron,
@@ -172,7 +167,7 @@ class Rep(ABC):
         Q_lazy = self.equivariant_basis()
         return Q_lazy @ Q_lazy.H
 
-    def __add__(self, other: Union["Rep", int, torch.Tensor]) -> "Rep":
+    def __add__(self, other: Union["Rep", int, torch.Tensor]) -> Union["Rep", "SumRep"]:
         """
         Compute the direct sum of representations.
         """
@@ -181,9 +176,11 @@ class Rep(ABC):
             case ZeroRep():
                 return self
             case Rep():
-                if self.G is not None and other.G is not None:
-                    return SumRep([self, other])
-                return DeferredSumRep([self, other])
+                match self.G, other.G:
+                    case Group(), Group():
+                        return SumRep([self, other])
+                    case _:
+                        return DeferredSumRep([self, other])
             case int():
                 if other == 0:
                     return self
@@ -195,7 +192,9 @@ class Rep(ABC):
                     return self + int(other) * ScalarRep(self.G)
                 raise ValueError("Can only add reps, ints, and singleton int tensors")
 
-    def __radd__(self, other: Union["Rep", int, torch.Tensor]) -> "Rep":
+    def __radd__(
+        self, other: Union["Rep", int, torch.Tensor]
+    ) -> Union["Rep", "SumRep"]:
         """
         Compute the direct sum of representations in reverse order.
         """
@@ -204,9 +203,11 @@ class Rep(ABC):
             case ZeroRep():
                 return self
             case Rep():
-                if self.G is not None and other.G is not None:
-                    return SumRep([other, self])
-                return DeferredSumRep([other, self])
+                match self.G, other.G:
+                    case Group(), Group():
+                        return SumRep([other, self])
+                    case _:
+                        return DeferredSumRep([other, self])
             case int():
                 if other == 0:
                     return self
@@ -336,9 +337,11 @@ class Rep(ABC):
 
     @property
     def T(self) -> "Rep":
-        if self.G is not None and self.G.is_orthogonal:
-            return self
-        return Dual(self, device=self.device)
+        """
+        Hack: we set the default dual rep to be self and overload it in `Base`
+        so that scalars and vectors have well-defined duals and we don't have to
+        """
+        return self
 
 
 class ZeroRep(Rep):
@@ -1248,7 +1251,9 @@ class Dual(Base):
             case torch.Tensor():
                 return torch.linalg.inv(rr).T
             case LinearOperator():
-                return rr.invT()
+                if isinstance(rr, InvertibleLinearOperator):
+                    return rr.invT()
+                raise ValueError("Cannot invert non-invertible linear operator")
 
     def drho(self, A: MatElem) -> MatElem:
         return -self.rep.drho(A).T

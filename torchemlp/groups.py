@@ -1,4 +1,4 @@
-from typing import Union, List, Callable
+from typing import Callable, cast
 from abc import ABC
 import random
 
@@ -32,13 +32,13 @@ class Group(ABC):
     d: int = -1
 
     # Continuous generators
-    lie_algebra: List[LinearOperator] = []
+    lie_algebra: list[LinearOperator] = []
 
     # Discrete generators
-    discrete_generators: List[LinearOperator] = []
+    discrete_generators: list[LinearOperator] = []
 
     # Sampling scale noise
-    z_scale: Union[torch.Tensor, float] = 1.0
+    z_scale: torch.Tensor | float = 1.0
 
     # Flags for simplifying computation
     is_orthogonal: bool = False
@@ -631,7 +631,7 @@ class Embed(Group):
         self,
         G: Group,
         d: int,
-        slice: Union[slice, int] = slice(None),
+        slice: slice | int = slice(None),
         device: torch.device = DEFAULT_DEVICE,
     ):
         A_dense = torch.zeros((len(G.lie_algebra), d, d), device=device)
@@ -687,9 +687,8 @@ class DirectProduct(Group):
         G1ks = [LazyKronsum([A1, 0 * I2]) for A1 in G1.lie_algebra]
         G2ks = [LazyKronsum([0 * I1, A2]) for A2 in G2.lie_algebra]
 
-        # TODO convince the type checker this is OK
-        self.discrete_generators = G1k + G2k
-        self.lie_algebra = G1ks + G2ks
+        self.discrete_generators = cast(list[LinearOperator], G1k + G2k)
+        self.lie_algebra = cast(list[LinearOperator], G1ks + G2ks)
 
         self.names = (repr(G1), repr(G2))
         super().__init__()

@@ -1,19 +1,19 @@
 from functools import reduce
-from typing import Union, List, Callable
+from typing import Callable
 
 import torch
 import torch.autograd.functional as F
 
-from .linop_base import LinearOperator
+from .linop_base import LinearOperator, InvertibleLinearOperator
 from .linop_utils import product, kronsum, lazy_direct_matmat
 
 
-class LazyKron(LinearOperator):
+class LazyKron(InvertibleLinearOperator):
     """
     A lazy implementation of the Kronecker product of many linear operators.
     """
 
-    def __init__(self, Ms: List[LinearOperator]):
+    def __init__(self, Ms: list[LinearOperator]):
         shape = product([Mi.shape[0] for Mi in Ms]), product([Mi.shape[1] for Mi in Ms])
         super().__init__(Ms[0].dtype, shape)
         self.Ms = Ms
@@ -26,17 +26,30 @@ class LazyKron(LinearOperator):
         ev = B.reshape(*[Mi.shape[-1] for Mi in self.Ms], -1)
         for i, M in enumerate(self.Ms):
             ev_front = torch.moveaxis(ev, i, 0)
-            Mev_front = (M @ ev_front.reshape(M.shape[-1], -1)).reshape(
-                M.shape[0], *ev_front.shape[1:]
+            Mev_front = M @ ev_front.reshape(M.dense().shape[-1], -1)
+            match Mev_front:
+                case torch.Tensor():
+                    Mev_front_dense = Mev_front
+                case LinearOperator():
+                    Mev_front_dense = Mev_front.dense()
+            ev = torch.moveaxis(
+                Mev_front_dense.reshape(M.dense().shape[0], *ev_front.shape[1:]), 0, i
             )
-            ev = torch.moveaxis(Mev_front, 0, i)
         return ev.reshape(self.shape[0], ev.shape[-1])
 
     def adjoint(self) -> LinearOperator:
         return LazyKron([Mi.H for Mi in self.Ms])
 
-    def invT(self) -> LinearOperator:
-        return LazyKron([Mi.invT() for Mi in self.Ms])
+    def invT(self) -> InvertibleLinearOperator:
+        invs = []
+        for M in self.Ms:
+            if isinstance(M, InvertibleLinearOperator):
+                invs.append(M.invT())
+            else:
+                raise NotImplementedError(
+                    "Cannot invert non-invertible linear operator."
+                )
+        return LazyKron(invs)
 
     def dense(self) -> torch.Tensor:
         Ms_dense = [M.dense() if isinstance(M, LinearOperator) else M for M in self.Ms]
@@ -48,7 +61,7 @@ class LazyKronsum(LinearOperator):
     A lazy implementation of the Kronecker sum of many linear operators.
     """
 
-    def __init__(self, Ms: List[LinearOperator]):
+    def __init__(self, Ms: list[LinearOperator]):
         shape = product([Mi.shape[0] for Mi in Ms]), product([Mi.shape[1] for Mi in Ms])
         super().__init__(Ms[0].dtype, shape)
         self.Ms = Ms
@@ -62,10 +75,15 @@ class LazyKronsum(LinearOperator):
         out = 0 * ev
         for i, M in enumerate(self.Ms):
             ev_front = torch.moveaxis(ev, i, 0)
-            Mev_front = (M @ ev_front.reshape(M.shape[-1], -1)).reshape(
-                M.shape[0], *ev_front.shape[1:]
+            Mev_front = M @ ev_front.reshape(M.shape[-1], -1)
+            match Mev_front:
+                case torch.Tensor():
+                    Mev_front_dense = Mev_front
+                case LinearOperator():
+                    Mev_front_dense = Mev_front.dense()
+            out += torch.moveaxis(
+                Mev_front_dense.reshape(M.shape[0], *ev_front.shape[1:]), 0, i
             )
-            out += torch.moveaxis(Mev_front, 0, i)
         return out.reshape(self.shape[0], out.shape[-1])
 
     def adjoint(self) -> LinearOperator:
@@ -123,7 +141,7 @@ class LazyConcat(LinearOperator):
     linear operators.
     """
 
-    def __init__(self, Ms: List[LinearOperator]):
+    def __init__(self, Ms: list[LinearOperator]):
         if not all(M.shape[0] == Ms[0].shape[0] for M in Ms):
             raise ValueError("All input operators must have the same shape")
         shape = (sum(M.shape[0] for M in Ms), Ms[0].shape[1])
@@ -166,13 +184,13 @@ class LazyConcat(LinearOperator):
         return torch.cat(Ms_dense, dim=0)
 
 
-class LazyDirectSum(LinearOperator):
+class LazyDirectSum(InvertibleLinearOperator):
     """
     Lazy implementation of a linear operator that is the direct sum of its
     input linear operators.
     """
 
-    def __init__(self, Ms: List[LinearOperator], mults: List[int] = []):
+    def __init__(self, Ms: list[LinearOperator], mults: list[int] = []):
         self.Ms = Ms
         self.mults = [1 for _ in self.Ms] if mults is None else mults
         dim = sum(Mi.shape[0] * m for Mi, m in zip(self.Ms, self.mults))
@@ -188,8 +206,14 @@ class LazyDirectSum(LinearOperator):
     def adjoint(self) -> LinearOperator:
         return LazyDirectSum([Mi.H for Mi in self.Ms], self.mults)
 
-    def invT(self) -> LinearOperator:
-        return LazyDirectSum([Mi.invT() for Mi in self.Ms], self.mults)
+    def invT(self) -> InvertibleLinearOperator:
+        invs = []
+        for M in self.Ms:
+            if isinstance(M, InvertibleLinearOperator):
+                invs.append(M.invT())
+            else:
+                raise ValueError("Cannot invert non-invertible linear operator")
+        return LazyDirectSum(invs, self.mults)
 
     def dense(self) -> torch.Tensor:
         Ms_all = [M for M, c in zip(self.Ms, self.mults) for _ in range(c)]
@@ -199,7 +223,7 @@ class LazyDirectSum(LinearOperator):
         return torch.block_diag(*Ms_dense)
 
 
-class LazyPerm(LinearOperator):
+class LazyPerm(InvertibleLinearOperator):
     """
     Lazy implementation of a linear operator that is the permutation of its
     input linear operators.
@@ -218,11 +242,11 @@ class LazyPerm(LinearOperator):
     def adjoint(self) -> LinearOperator:
         return LazyPerm(torch.argsort(self.perm))
 
-    def invT(self) -> LinearOperator:
+    def invT(self) -> InvertibleLinearOperator:
         return self
 
 
-class LazyShift(LinearOperator):
+class LazyShift(InvertibleLinearOperator):
     """
     Lazy implementation of a linear operator that is the shift of its input's
     elements or rows.
@@ -242,17 +266,17 @@ class LazyShift(LinearOperator):
     def adjoint(self) -> LinearOperator:
         return LazyShift(self.n, -self.k)
 
-    def invT(self) -> LinearOperator:
+    def invT(self) -> InvertibleLinearOperator:
         return self
 
 
-class SwapMatrix(LinearOperator):
+class SwapMatrix(InvertibleLinearOperator):
     """
     Lazy implementation of a linear operator that is the swap of its input's
     elements or rows.
     """
 
-    def __init__(self, swaps: Union[torch.Tensor, List[int]], n: int):
+    def __init__(self, swaps: torch.Tensor | list[int], n: int):
         super().__init__(None, (n, n))
         self.swaps = swaps
         self.n = n
@@ -268,11 +292,11 @@ class SwapMatrix(LinearOperator):
     def adjoint(self) -> LinearOperator:
         return self
 
-    def invT(self) -> LinearOperator:
+    def invT(self) -> InvertibleLinearOperator:
         return self
 
 
-class Rot90(LinearOperator):
+class Rot90(InvertibleLinearOperator):
     """
     Lazy implementation of a linear operator that performs a given number of
     quarter turns on its input vector(s).
@@ -289,5 +313,5 @@ class Rot90(LinearOperator):
     def matmat(self, B: torch.Tensor) -> torch.Tensor:
         return torch.rot90(B.reshape((self.n, self.n, -1)), k=self.k).reshape(B.shape)
 
-    def invT(self) -> LinearOperator:
+    def invT(self) -> InvertibleLinearOperator:
         return self

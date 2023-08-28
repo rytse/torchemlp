@@ -107,7 +107,9 @@ class LinearOperator(ABC):
     ) -> Union["LinearOperator", torch.Tensor]:
         return self * x
 
-    def __matmul__(self, x: torch.Tensor) -> Union[torch.Tensor, "LinearOperator"]:
+    def __matmul__(
+        self, x: Union[torch.Tensor, "LinearOperator"]
+    ) -> Union[torch.Tensor, "LinearOperator"]:
         return self * x
 
     def __rmul__(self, x: torch.Tensor | int | float) -> "LinearOperator":
@@ -128,7 +130,9 @@ class LinearOperator(ABC):
             case int() | float():
                 return _ScaledLinearOperator(self, x)
 
-    def __rmatmul__(self, x: torch.Tensor) -> Union[torch.Tensor, "LinearOperator"]:
+    def __rmatmul__(
+        self, x: Union[torch.Tensor, "LinearOperator"]
+    ) -> Union[torch.Tensor, "LinearOperator"]:
         return x * self
 
     def __pow__(self, p: Union[int, torch.Tensor]):
@@ -191,6 +195,19 @@ class LinearOperator(ABC):
                 return res
 
 
+class InvertibleLinearOperator(LinearOperator, ABC):
+    """
+    Invertible linear operator.
+    """
+
+    @abstractmethod
+    def invT(self) -> "InvertibleLinearOperator":
+        """
+        Inverse transpose of the linear operator.
+        """
+        pass
+
+
 class _AdjointLinearOperator(LinearOperator):
     """
     Adjoint of a linear operator.
@@ -239,7 +256,7 @@ class _TransposedLinearOperator(LinearOperator):
         return torch.conj(self.A.matmat(torch.conj(B)))
 
 
-class _SumLinearOperator(LinearOperator):
+class _SumLinearOperator(InvertibleLinearOperator):
     """
     Sum of two linear operators.
     """
@@ -270,15 +287,15 @@ class _SumLinearOperator(LinearOperator):
     def adjoint(self) -> LinearOperator:
         return self.A.H + self.B.H
 
-    # TODO pull invT into a separate class and do multiple inhereitance
-    # to have type checked guarantees
     def invT(self) -> LinearOperator:
-        if hasattr(self.A, "invT") and hasattr(self.B, "invT"):
+        if isinstance(self.A, InvertibleLinearOperator) and isinstance(
+            self.B, InvertibleLinearOperator
+        ):
             return self.A.invT() + self.B.invT()
         raise NotImplementedError
 
 
-class _ProductLinearOperator(LinearOperator):
+class _ProductLinearOperator(InvertibleLinearOperator):
     """
     Product (composition) of two linear operators.
     """
@@ -312,7 +329,9 @@ class _ProductLinearOperator(LinearOperator):
         return self.B.H * self.A.H
 
     def invT(self) -> LinearOperator:
-        if hasattr(self.A, "invT") and hasattr(self.B, "invT"):
+        if isinstance(self.A, InvertibleLinearOperator) and isinstance(
+            self.B, InvertibleLinearOperator
+        ):
             res = self.A.invT() * self.B.invT()
             match res:
                 case LinearOperator():
@@ -325,7 +344,7 @@ class _ProductLinearOperator(LinearOperator):
         return self.A.dense() @ self.B.dense()
 
 
-class _ScaledLinearOperator(LinearOperator):
+class _ScaledLinearOperator(InvertibleLinearOperator):
     """
     Scaling of a linear operator by a scalar constant
     """
@@ -359,14 +378,14 @@ class _ScaledLinearOperator(LinearOperator):
     def adjoint(self) -> LinearOperator:
         return torch.conj(self.c) * self.A.H
 
-    def invT(self) -> LinearOperator:
+    def invT(self) -> InvertibleLinearOperator:
         return 1.0 / self.c * self.A.T
 
     def dense(self) -> torch.Tensor:
         return self.c * self.A.dense()
 
 
-class _PowerLinearOperator(LinearOperator):
+class _PowerLinearOperator(InvertibleLinearOperator):
     """
     Power of a linear operator by a scalar constant.
     """
@@ -403,13 +422,13 @@ class _PowerLinearOperator(LinearOperator):
     def adjoint(self) -> LinearOperator:
         return self.A.H**self.p
 
-    def invT(self) -> LinearOperator:
-        if hasattr(self.A, "invT"):
+    def invT(self) -> InvertibleLinearOperator:
+        if isinstance(self.A, InvertibleLinearOperator):
             return self.A.invT() ** self.p
         raise NotImplementedError
 
 
-class MatrixLinearOperator(LinearOperator):
+class MatrixLinearOperator(InvertibleLinearOperator):
     """
     A linear operator that wraps a matrix.
     """
@@ -431,11 +450,14 @@ class MatrixLinearOperator(LinearOperator):
     def rmatmat(self, x: torch.Tensor) -> torch.Tensor:
         return self.A.H @ x
 
-    def adjoint(self) -> LinearOperator:
+    def adjoint(self) -> InvertibleLinearOperator:
         return MatrixLinearOperator(self.A.H)
 
+    def invT(self) -> InvertibleLinearOperator:
+        return MatrixLinearOperator(torch.inverse(self.A).T)
 
-class ZeroOperator(LinearOperator):
+
+class ZeroOperator(InvertibleLinearOperator):
     def __init__(self):
         super(ZeroOperator, self).__init__(None, (0,))
 
@@ -451,8 +473,14 @@ class ZeroOperator(LinearOperator):
     def rmatmat(self, x: torch.Tensor) -> torch.Tensor:
         return torch.zeros_like(x, dtype=x.dtype, device=x.device)
 
+    def adjoint(self) -> InvertibleLinearOperator:
+        return self
 
-class IdentityOperator(LinearOperator):
+    def invT(self) -> InvertibleLinearOperator:
+        return self
+
+
+class IdentityOperator(InvertibleLinearOperator):
     """
     A linear operator that is the identity operator.
     """
@@ -476,7 +504,7 @@ class IdentityOperator(LinearOperator):
     def adjoint(self) -> LinearOperator:
         return self
 
-    def invT(self) -> LinearOperator:
+    def invT(self) -> InvertibleLinearOperator:
         return self
 
 
@@ -488,7 +516,7 @@ class I(IdentityOperator):
     pass
 
 
-class Lazy(LinearOperator):
+class Lazy(InvertibleLinearOperator):
     """
     A lazy wrapper on MatrixLinearOperator.
     """
@@ -513,5 +541,5 @@ class Lazy(LinearOperator):
     def dense(self, device: torch.device = DEFAULT_DEVICE) -> torch.Tensor:
         return self.A.to(device)
 
-    def invT(self) -> LinearOperator:
+    def invT(self) -> InvertibleLinearOperator:
         return Lazy(torch.linalg.inv(self.A).H)

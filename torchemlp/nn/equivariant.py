@@ -264,7 +264,7 @@ class EMLP(nn.Module):
                 raise ValueError(
                     "Got a zero Rep: ch = {} and G = {} invalid".format(ch, G)
                 )
-            case Rep():
+            case Rep() | SumRep():
                 can_rep, _ = rep.canonicalize()
                 return can_rep
 
@@ -292,7 +292,7 @@ class EMLP(nn.Module):
                 raise ValueError(
                     "Got a zero Rep, n = {} and r = {} invalid".format(n, r)
                 )
-            case Rep():
+            case Rep() | SumRep():
                 return out
 
     def equivariance_error(self, x: torch.Tensor) -> torch.Tensor:

@@ -1,4 +1,5 @@
-.vscode
+.vscode/
+typings/
 
 examples/lightning_logs/
 lightning_logs/
