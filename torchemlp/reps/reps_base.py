@@ -1,31 +1,32 @@
-from abc import ABC, abstractmethod
-from typing import Optional, Generator, Union
-from functools import lru_cache, reduce
-from collections import defaultdict
 import itertools
+from abc import ABC, abstractmethod
+from collections import defaultdict
+from functools import lru_cache, reduce
+from typing import Generator, Optional, Union
 
 import torch
 
 from torchemlp.groups import Group
 from torchemlp.ops import (
-    lazy_direct_matmat,
-    product,
-    LinearOperator,
-    InvertibleLinearOperator,
-    ZeroOperator,
     I,
-    LazyKron,
-    LazyKronsum,
+    InvertibleLinearOperator,
+    LazyConcat,
     LazyDirectSum,
     LazyJVP,
-    LazyConcat,
+    LazyKron,
+    LazyKronsum,
     LazyPerm,
+    LinearOperator,
+    ZeroOperator,
+    densify,
+    lazify,
+    lazy_direct_matmat,
+    product,
 )
-from torchemlp.ops import densify, lazify
 from torchemlp.utils import DEFAULT_DEVICE
 
+from .reps_solvers import krylov_constraint_solve, orthogonal_complement
 from .reps_utils import dictify_rep
-from .reps_solvers import orthogonal_complement, krylov_constraint_solve
 
 MatElem = torch.Tensor | LinearOperator
 

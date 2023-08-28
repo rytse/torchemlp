@@ -1,22 +1,20 @@
-from typing import Callable, cast
-from abc import ABC
 import random
+from abc import ABC
+from typing import Callable, cast
 
 import torch
 
 from torchemlp.ops import (
-    LinearOperator,
-    MatrixLinearOperator,
     I,
     LazyKron,
     LazyKronsum,
-    LazyShift,
     LazyPerm,
+    LazyShift,
+    LinearOperator,
+    MatrixLinearOperator,
     Rot90,
 )
-
 from torchemlp.utils import DEFAULT_DEVICE, rel_rms_diff
-
 
 # Type aliases for group elements, which will always be dense matrices
 GroupElem = torch.Tensor

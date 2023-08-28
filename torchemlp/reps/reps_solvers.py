@@ -1,5 +1,4 @@
 import torch
-
 from tqdm import tqdm
 
 from torchemlp.ops import LinearOperator

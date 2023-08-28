@@ -1,11 +1,10 @@
-from typing import Union, Callable, Any
 from abc import ABC, abstractmethod
+from typing import Any, Callable, Union
 
 import torch
 
 import torchemlp.ops
 import torchemlp.utils
-
 from torchemlp.utils import DEFAULT_DEVICE
 
 

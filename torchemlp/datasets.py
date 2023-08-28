@@ -2,11 +2,11 @@ from abc import ABC
 
 import torch
 import torch.nn as nn
-from torch.utils.data import Dataset
 from functorch import vmap  # type: ignore
+from torch.utils.data import Dataset
 
-from torchemlp.groups import Group, O, SO
-from torchemlp.reps import Rep, Vector, Scalar, T
+from torchemlp.groups import SO, Group, O
+from torchemlp.reps import Rep, Scalar, T, Vector
 from torchemlp.utils import DEFAULT_DEVICE
 
 

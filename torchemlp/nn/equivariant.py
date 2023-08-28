@@ -1,14 +1,14 @@
+from functools import lru_cache
 from math import sqrt
 from typing import Callable
-from functools import lru_cache
 
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from torchemlp.utils import lambertW, binom, rel_rms_diff
 from torchemlp.groups import Group
-from torchemlp.reps import Rep, T, SumRep, Scalar, ScalarRep, Zero, bilinear_params
+from torchemlp.reps import Rep, Scalar, ScalarRep, SumRep, T, Zero, bilinear_params
+from torchemlp.utils import binom, lambertW, rel_rms_diff
 
 
 class EquivariantLinear(nn.Module):
