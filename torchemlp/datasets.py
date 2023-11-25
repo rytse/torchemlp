@@ -165,8 +165,8 @@ class Radius(SymDataset):
         repout = Scalar
         G = SO(d)
 
-        X = 100 * torch.randn(N, d, device=device)
-        Y = torch.norm(X, dim=1)
+        X = 100 * torch.randn(N, d, device=device).detach()
+        Y = torch.norm(X, dim=1).detach()
         Y = Y[..., None]
 
         stats = [X.mean(0), X.std(dim=0), Y.mean(dim=0), Y.std(dim=0)]

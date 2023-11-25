@@ -13,31 +13,30 @@ class MLP(nn.Module):
     """
 
     def __init__(
-        self, dim_in: int, dim_out: int, width: int, depth: int, act: Callable = nn.SiLU
+        self,
+        dim_in: int,
+        dim_out: int,
+        width: int,
+        depth: int,
+        act: Callable = nn.SiLU,
+        bias: bool = True,
     ):
-        """
-        Args:
-            dim_in: input dimension
-            dim_out: output dimension
-            width: width of each hidden layer
-            depth: number of hidden layers
-            act: activation function
-        """
         super().__init__()
         self.act = act
 
-        self.layers = []
-        self.layers.append(nn.Linear(dim_in, width, bias=False))
+        # Using nn.ModuleList for proper layer registration
+        self.layers = nn.ModuleList()
+        self.layers.append(nn.Linear(dim_in, width, bias=bias))
         self.layers.append(self.act())
         for _ in range(depth):
-            self.layers.append(nn.Linear(width, width, bias=False))
+            self.layers.append(nn.Linear(width, width, bias=bias))
             self.layers.append(self.act())
-        self.layers.append(nn.Linear(width, dim_out, bias=False))
-
-        self.network = nn.Sequential(*self.layers)
+        self.layers.append(nn.Linear(width, dim_out, bias=bias))
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        return self.network(x)
+        for layer in self.layers:
+            x = layer(x)
+        return x
 
 
 class Standardize(nn.Module):
@@ -74,7 +73,7 @@ class Standardize(nn.Module):
 
 
 class RegressionLightning(pl.LightningModule):
-    def __init__(self, model, lr=3e-3, weight_decay=0.0):
+    def __init__(self, model, lr=1e-3, weight_decay=0.0):
         super().__init__()
         self.model = model
         self.lr = lr
@@ -92,7 +91,7 @@ class RegressionLightning(pl.LightningModule):
         x, y = batch
         y_pred = self.model(x)
         loss = F.mse_loss(y_pred, y)
-        self.log("test_loss", loss.item())
+        self.log("test_loss", loss)
 
     def validation_step(self, batch, batch_idx):
         x, y = batch
