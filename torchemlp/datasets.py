@@ -1,5 +1,8 @@
 from abc import ABC
+from typing import Tuple
 
+import numpy as np
+import numpy.typing as npt
 import torch
 import torch.nn as nn
 from functorch import vmap  # type: ignore
@@ -96,22 +99,6 @@ class Inertia(SymDataset):
         ).sum(1)
         Y = inertia.reshape(-1, 9)
 
-        # Xmean = self.X.mean(0)
-        # Xmean[k:] = 0.0
-        # Xstd = torch.zeros_like(Xmean, dtype=Xmean.dtype, device=device)
-        # Xstd[:k] = torch.abs(self.X[:, :k]).mean(0)
-        # Xstd[k:] = (
-        # torch.abs(
-        # self.X[:, k:].reshape(N, k, 3).mean((0, 2))[:, None]
-        # + torch.zeros((k, 3), dtype=Xstd.dtype, device=device)
-        # )
-        # ).reshape(k * 3)
-
-        # Ymean = 0 * self.Y.mean(0)
-        # Ystd = torch.abs(self.Y - Ymean).mean((0, 1)) + torch.zeros_like(
-        # Ymean, dtype=Ymean.dtype, device=device
-        # )
-
         stats = [0.0, 1.0, 0.0, 1.0]
 
         super().__init__(dim, G, repin, repout, X, Y, stats)
@@ -123,7 +110,7 @@ class O5Synthetic(SymDataset):
 
     f(x_1, x_2) = sin(||x_1||) - 1/2||x_2||^3 + 〈x_1, x_2〉/ (||x_1|| ||x_2||)
 
-    O(5)-invariant.
+    O(5)-invariant
     """
 
     def __init__(self, N=1024, device: torch.device = DEFAULT_DEVICE):
@@ -134,30 +121,40 @@ class O5Synthetic(SymDataset):
         repout = Scalar
         G = O(d)
 
-        X = torch.randn(N, dim, device=device)
-        ri = X.reshape(-1, 2, d)
-        r1 = ri[:, 0, :]
-        r2 = ri[:, 1, :]
-        r1n = torch.norm(r1, dim=1)
-        r2n = torch.norm(r2, dim=1)
-        Y = (
-            torch.sin(r1n)
-            - 0.5 * torch.pow(r2n, 3)
-            + torch.sum(r1 * r2, dim=1) / r1n / r2n
-        )
-        Y = Y[..., None]
+        X, Y = self.generate_data(N, device)
 
-        Xmean = X.mean(0)
-        Xscale = (
-            torch.sqrt((X.reshape(N, 2, d) ** 2).mean((0, 2)))[:, None] + 0 * ri[0]
-        ).reshape(dim)
-
-        stats = [Xmean, Xscale, Y.mean(dim=0), Y.std(dim=0)]
+        stats = [X.mean(dim=0), X.std(dim=0), Y.mean(dim=0), Y.std(dim=0)]
 
         super().__init__(dim, G, repin, repout, X, Y, stats)
 
+    def f(self, x1: npt.NDArray, x2: npt.NDArray) -> npt.NDArray:
+        norm_x1 = np.linalg.norm(x1)
+        norm_x2 = np.linalg.norm(x2)
+        return (
+            np.sin(norm_x1)
+            - 0.5 * (norm_x2**3)
+            + np.dot(x1, x2) / (norm_x1 * norm_x2)
+        )
+
+    def generate_data(
+        self, num_samples: int, device: torch.device
+    ) -> Tuple[torch.Tensor, torch.Tensor]:
+        X_np = np.random.rand(num_samples, 10)
+        Y_np = np.array([self.f(sample[:5], sample[5:]) for sample in X_np])
+
+        X = torch.tensor(X_np, dtype=torch.float32).to(device)
+        Y = torch.tensor(Y_np, dtype=torch.float32).to(device)
+
+        return X, Y
+
 
 class Radius(SymDataset):
+    """
+    Dataset representing the radius of a 3D vector.
+
+    SO(3)-invariant
+    """
+
     def __init__(self, N=1024, device: torch.device = DEFAULT_DEVICE):
         d = 3
 
@@ -165,10 +162,19 @@ class Radius(SymDataset):
         repout = Scalar
         G = SO(d)
 
-        X = 100 * torch.randn(N, d, device=device).detach()
-        Y = torch.norm(X, dim=1).detach()
-        Y = Y[..., None]
+        X, Y = self.generate_data(N, device)
 
-        stats = [X.mean(0), X.std(dim=0), Y.mean(dim=0), Y.std(dim=0)]
+        stats = [X.mean(dim=0), X.std(dim=0), Y.mean(dim=0), Y.std(dim=0)]
 
         super().__init__(d, G, repin, repout, X, Y, stats)
+
+    def generate_data(
+        self, num_samples: int, device: torch.device
+    ) -> Tuple[torch.Tensor, torch.Tensor]:
+        X_np = np.random.uniform(-5, 5, (num_samples, 3))
+        Y_np = np.sqrt(np.sum(np.square(X_np), axis=1)).reshape(-1, 1)
+
+        X_torch = torch.tensor(X_np, dtype=torch.float32).to(device)
+        Y_torch = torch.tensor(Y_np, dtype=torch.float32).to(device)
+
+        return X_torch, Y_torch
