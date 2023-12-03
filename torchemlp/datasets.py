@@ -8,7 +8,7 @@ import torch.nn as nn
 from functorch import vmap  # type: ignore
 from torch.utils.data import Dataset
 
-from torchemlp.groups import SO, Group, O
+from torchemlp.groups import SO, Group, O, Sp
 from torchemlp.reps import Rep, Scalar, T, Vector
 from torchemlp.utils import DEFAULT_DEVICE
 
@@ -178,3 +178,44 @@ class Radius(SymDataset):
         Y_torch = torch.tensor(Y_np, dtype=torch.float32).to(device)
 
         return X_torch, Y_torch
+
+
+class SymplecticForm(SymDataset):
+    """
+    Dataset representing the cannonical symplectic form in n dimensions.
+    """
+
+    def __init__(self, m, N=1024, device: torch.device = DEFAULT_DEVICE):
+        self.m = m
+        dim = 2 * m
+
+        repin = 2 * Vector
+        repout = Scalar
+        G = Sp(m)
+
+        X, Y = self.generate_data(N, device)
+
+        stats = [X.mean(dim=0), X.std(dim=0), Y.mean(dim=0), Y.std(dim=0)]
+
+        super().__init__(dim, G, repin, repout, X, Y, stats)
+
+    def generate_data(
+        self, num_samples: int, device: torch.device
+    ) -> Tuple[torch.Tensor, torch.Tensor]:
+        omega = np.zeros((2 * self.m, 2 * self.m))
+        omega[: self.m, self.m :] = np.eye(self.m)
+        omega[self.m :, : self.m] = -np.eye(self.m)
+
+        x_data = np.random.randn(num_samples, 2 * self.m)
+        y_data = np.random.randn(num_samples, 2 * self.m)
+        outs = np.einsum("bi,ij,bj->b", x_data, omega, y_data)
+
+        X = torch.hstack(
+            [
+                torch.tensor(x_data, dtype=torch.float32).to(device),
+                torch.tensor(y_data, dtype=torch.float32).to(device),
+            ]
+        )
+        Y = torch.tensor(outs, dtype=torch.float32).to(device)
+
+        return X, Y
