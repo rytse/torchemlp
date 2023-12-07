@@ -189,7 +189,7 @@ class SymplecticForm(SymDataset):
         self.m = m
         dim = 2 * m
 
-        repin = 2 * Vector
+        repin = Vector
         repout = Scalar
         G = Sp(m)
 
@@ -206,16 +206,57 @@ class SymplecticForm(SymDataset):
         omega[: self.m, self.m :] = np.eye(self.m)
         omega[self.m :, : self.m] = -np.eye(self.m)
 
-        x_data = np.random.randn(num_samples, 2 * self.m)
-        y_data = np.random.randn(num_samples, 2 * self.m)
-        outs = np.einsum("bi,ij,bj->b", x_data, omega, y_data)
+        x_data = np.random.uniform(-5, 5, (num_samples, 2 * self.m))
+        outs = np.einsum("bi,ij,bj->b", x_data, omega, x_data)
 
-        X = torch.hstack(
-            [
-                torch.tensor(x_data, dtype=torch.float32).to(device),
-                torch.tensor(y_data, dtype=torch.float32).to(device),
-            ]
-        )
-        Y = torch.tensor(outs, dtype=torch.float32).to(device)
+        X = torch.tensor(x_data, dtype=torch.float32, device=device)
+        Y = torch.tensor(outs, dtype=torch.float32, device=device).unsqueeze(1)
 
         return X, Y
+
+
+class HarmonicOscillatorHamiltonian(SymDataset):
+    """
+    Dataset representing the Hamiltonian of a simple harmonic oscillator in m-dimensional space.
+    """
+
+    def __init__(
+        self,
+        coord_dim: int,
+        mass: float,
+        omega: float,
+        n_samples: int = 1024,
+        device: torch.device = DEFAULT_DEVICE,
+    ):
+        self.coord_dim = coord_dim
+        self.mass = mass
+        self.omega = omega
+
+        dim = 2 * coord_dim
+
+        repin = Vector
+        repout = Scalar
+        G = Sp(coord_dim)
+
+        X, Y = self.generate_data(n_samples, device)
+
+        stats = [X.mean(dim=0), X.std(dim=0), Y.mean(dim=0), Y.std(dim=0)]
+
+        super().__init__(dim, G, repin, repout, X, Y, stats)
+
+    def generate_data(
+        self, n_samples: int, device: torch.device
+    ) -> Tuple[torch.Tensor, torch.Tensor]:
+        q = np.random.uniform(-5.0, 5.0, (n_samples, self.coord_dim))
+        p = np.random.uniform(-5.0, 5.0, (n_samples, self.coord_dim))
+
+        ke = 1.0 / 2.0 / self.mass * (p**2).sum(axis=1)
+        pe = 1.0 / 2.0 * self.mass * self.omega**2 * (q**2).sum(axis=1)
+        H = ke + pe
+
+        X = torch.hstack(
+            [torch.tensor(q, dtype=torch.float32), torch.tensor(p, dtype=torch.float32)]
+        )
+        Y = torch.tensor(H, dtype=torch.float32).unsqueeze(-1)
+
+        return X.to(device), Y.to(device)
